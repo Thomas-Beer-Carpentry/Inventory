@@ -1,8 +1,16 @@
 # Workshop — Android browser app
 
-Workshop is a browser app for Android Chrome. Stock, jobs, scanning name and permanent material history are stored on the phone in IndexedDB. The barcode decoder is included with the app files. There is no inventory server or stock sync. Initial access to the private installation link may require signing in to your ChatGPT account; the inventory itself uses the scanning name saved on your phone.
+Workshop is a browser app for Android Chrome. Stock, jobs, scanning name and permanent material history are stored on the phone in IndexedDB. The barcode decoder is included with the app files. There is no inventory server or stock sync. The inventory uses the scanning name saved on your phone. GitHub Pages serves the app files publicly; stock and job data remain in each phone’s private browser storage.
 
 The browser package is static and can be installed from its secure hosting link. Phone-camera behavior and actual installed-browser persistence remain unverified on a physical device.
+
+## Enable the installation link
+
+The source is linked to `Thomas-Beer-Carpentry/Inventory`. The `Publish Workshop browser app` GitHub Actions workflow builds and checks the static app, then deploys its files to GitHub Pages. It uses pinned official actions and does not need npm dependency installation or a personal access token.
+
+The owner must enable Pages once: open the repository’s **Settings → Pages**, then set **Build and deployment → Source** to **GitHub Actions**. This setting cannot be changed through the connected GitHub tools. The workflow’s standard token cannot enable a disabled Pages site.
+
+If the first workflow attempt failed before Pages was enabled, open **Actions → Publish Workshop browser app** and use **Run workflow** on `main`, or rerun that failed attempt. The successful deployment provides the installation URL. The expected project address is `https://thomas-beer-carpentry.github.io/Inventory/`; it is not a confirmed live link until deployment succeeds.
 
 ## Install and use on a phone
 
@@ -36,8 +44,8 @@ npm test
 python3 scripts/package-browser.py
 ```
 
-The static website is in `dist/client`; the browser ZIP is `dist/workshop-browser.zip`. Serve its app files at the origin root because imports, manifest and service-worker paths start with `/`. The package script rebuilds locally and requires only Node.js 24+ and Python 3; it makes no downloads or network requests. Hosting only serves these files and receives no inventory writes. It is not required during normal use after caching.
+The static website is in `dist/client`; the browser ZIP is `dist/workshop-browser.zip`. Serve its app files together at a fixed root or project directory. Imports, manifest and service-worker paths are relative, so both `/` and `/Inventory/` work. Keep the trailing slash on the installation URL. Each project path has its own database/cache; the original root database name is preserved. The package script rebuilds locally and requires only Node.js 24+ and Python 3; it makes no downloads or network requests. Hosting only serves these files and receives no inventory writes. It is not required during normal use after caching.
 
 Tests cover transactional stock/job rules, returns, failed writes, duplicate confirmations, backup validation, scanner lifecycle, an actual EAN-13 decoder fixture, cached offline resources, and first service-worker installation failure/readiness timeouts. The IndexedDB test substitute is in-memory; physical phone persistence, installed-app airplane-mode launch and camera scanning still need device checks.
 
-The native Android source is retained under `android/`; see `android/README.md` for its separate status. It has not been built into an APK. Legacy SQLite/PC code and Sites configuration are reference source and are not used by the browser inventory. The hosted site serves the static browser app; Workshop inventory is not stored on that host.
+The native Android source is retained under `android/`; see `android/README.md` for its separate status. It has not been built into an APK. Legacy SQLite/PC code and Sites configuration are reference source and are not used by GitHub Pages or the browser inventory. Hosting serves only the static browser app; Workshop inventory is not stored on that host.

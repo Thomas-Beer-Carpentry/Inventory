@@ -70,7 +70,7 @@ test('First browser installation waits for activation and advertises offline rea
  const h=browserHarness(),statuses=[];
  const task=prepareOffline(value=>statuses.push(value),h.browser);
  await flush();
- assert.deepEqual(h.registrationCalls,[['/sw.js',{scope:'/'}]]);
+ assert.deepEqual(h.registrationCalls,[['https://workshop.test/sw.js',{scope:'/'}]]);
  assert.deepEqual(statuses,[preparing]);
  assert.equal(h.messages.length,0);
 

@@ -41,7 +41,8 @@ export async function prepareOffline(onStatus,browser=globalThis){
  if(!browser.isSecureContext||!navigator||!('serviceWorker' in navigator)){onStatus('Open the secure app link to enable offline use');return;}
  try{
   onStatus('Preparing offline use…');
-  const registration=await navigator.serviceWorker.register('/sw.js',{scope:'/'});
+  const base=new URL('./',browser.location.href||browser.location.origin+'/');
+  const registration=await navigator.serviceWorker.register(new URL('sw.js',base).href,{scope:base.pathname});
   const worker=await activeWorker(registration,browser);
   const ready=await cachedStatus(worker,browser);
   onStatus(ready?'Ready offline · saved on this phone':'Offline setup is incomplete. Reopen while online.');

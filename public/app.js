@@ -1,7 +1,7 @@
-import {phoneInventory} from '/phone-store.js';
-import {prepareOffline} from '/offline.js';
-import {createCameraScanner,cameraError} from '/scanner.js';
-import {isAndroidApp,androidBackup} from '/android-bridge.js';
+import {phoneInventory} from './phone-store.js';
+import {prepareOffline} from './offline.js';
+import {createCameraScanner,cameraError} from './scanner.js';
+import {isAndroidApp,androidBackup} from './android-bridge.js';
 const paths={box:'M21 8l-9-5-9 5m18 0v9l-9 5-9-5V8m18 0-9 5-9-5m9 5v9m-4-17 9 5',jobs:'M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M3 6h18v14H3zM3 11l9 3 9-3M10 12h4v4h-4z',activity:'M3 12h4l3-8 4 16 3-8h4',scan:'M4 8V4h4m8 0h4v4m0 8v4h-4M8 20H4v-4M7 9v6m3-6v6m4-6v6m3-6v6',in:'M12 3v12m-4-4 4 4 4-4M4 15v5h16v-5',out:'M12 15V3m-4 4 4-4 4 4M4 15v5h16v-5',return:'M9 4 4 9l5 5M4 9h10a6 6 0 0 1 0 12h-3',plus:'M12 5v14M5 12h14',search:'M21 21l-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',calendar:'M4 5h16v16H4zM7 3v4m10-4v4M4 10h16',home:'M3 10l9-7 9 7M5 9v12h14V9M9 21v-7h6v7',pin:'M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 1 1 16 0M15 10a3 3 0 1 1-6 0 3 3 0 0 1 6 0',close:'M6 6l12 12M6 18 18 6',check:'M5 12l4 4L19 6',clock:'M12 7v5l3 2M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',chevron:'M9 5l7 7-7 7',camera:'M3 7h4l2-3h6l2 3h4v14H3zM16 14a4 4 0 1 1-8 0 4 4 0 0 1 8 0',back:'M19 12H5m6-6-6 6 6 6',shield:'M12 3l8 3v6c0 5-8 10-8 10S4 17 4 12V6zM8 12l3 3 5-6'};
 const icon=(name)=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name]||paths.box}"/></svg>`;
 const esc=(v)=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

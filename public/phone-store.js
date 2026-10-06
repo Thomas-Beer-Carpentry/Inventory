@@ -104,4 +104,8 @@ export function createPhoneStore({indexedDB=globalThis.indexedDB,IDBKeyRange=glo
  }
  return {request,async close(){if(opening){const database=await opening;database.close();opening=null;}}};
 }
-export const phoneInventory=createPhoneStore();
+export function phoneDatabaseName(moduleUrl=import.meta.url){
+ const base=new URL('./',moduleUrl).pathname;
+ return base==='/'?'workshop-phone-v1':'workshop-phone-v1:'+base;
+}
+export const phoneInventory=createPhoneStore({databaseName:phoneDatabaseName()});
