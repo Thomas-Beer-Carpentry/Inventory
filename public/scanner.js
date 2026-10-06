@@ -14,7 +14,7 @@ export function createCameraScanner({hostId,onCode,browser=globalThis}){
  let canceled=false,reported=false,closing=null;
  const started=Promise.resolve().then(()=>{
   if(canceled)return;
-  return reader.start({facingMode:{ideal:'environment'}},{fps:10,qrbox:(width,height)=>({width:Math.min(Math.floor(width*.9),340),height:Math.min(Math.floor(height*.45),160)})},code=>{
+  return reader.start({facingMode:'environment'},{fps:10,qrbox:(width,height)=>({width:Math.min(Math.floor(width*.9),340),height:Math.min(Math.floor(height*.45),160)})},code=>{
    if(canceled||reported||!code)return;
    reported=true;onCode(String(code));
   },()=>{});
