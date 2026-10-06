@@ -47,6 +47,16 @@ test('Camera start reaches the real library media boundary with a rear-camera pr
  }
 });
 
+test('An explicit lens reaches the real library media boundary as an exact device ID',async()=>{
+ const {browser,calls}=libraryBrowser();
+ const scanner=createCameraScanner({hostId:'scan',cameraId:'main-rear-lens',onCode(){},browser});
+ try{
+  await assert.rejects(scanner.ready,error=>String(error).includes(mediaBoundary));
+  assert.equal(calls.length,1);
+  assert.deepEqual(calls[0],{audio:false,video:{deviceId:{exact:'main-rear-lens'}}});
+ }finally{await scanner.stop();}
+});
+
 test('The pinned library rejects the unsupported ideal shortcut with the reported error',async()=>{
  const {browser,calls}=libraryBrowser();
  const reader=new browser.Html5Qrcode('scan',{verbose:false});

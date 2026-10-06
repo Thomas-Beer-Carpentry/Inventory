@@ -28,7 +28,17 @@ export function cameraError(error,browser=globalThis){
  if(error?.name==='NotReadableError'||/NotReadableError/i.test(description))return 'The camera is in use. Close other camera apps, then try again.';
  return typeof error==='string'?error:error?.message||'The camera could not be started. Please try again.';
 }
-export function createCameraScanner({hostId,onCode,onProgress=()=>{},browser=globalThis}){
+function cameraPreferenceKey(moduleUrl){return 'workshop-camera-v1:'+new URL('./',moduleUrl).pathname;}
+export function readCameraPreference(browser=globalThis,moduleUrl=import.meta.url){
+ try{return browser.localStorage?.getItem(cameraPreferenceKey(moduleUrl))||'';}catch{return '';}
+}
+export function saveCameraPreference(cameraId,browser=globalThis,moduleUrl=import.meta.url){
+ try{
+  if(cameraId)browser.localStorage?.setItem(cameraPreferenceKey(moduleUrl),cameraId);
+  else browser.localStorage?.removeItem(cameraPreferenceKey(moduleUrl));
+ }catch{}
+}
+export function createCameraScanner({hostId,onCode,onProgress=()=>{},cameraId='',browser=globalThis}){
  if(!browser.isSecureContext||!browser.navigator?.mediaDevices?.getUserMedia)throw new Error('Phone camera access needs a secure HTTPS address. Open the secure Workshop link on your phone.');
  if(!browser.Html5Qrcode)throw new Error('The barcode scanner did not load. Reload Workshop and try again.');
  const formats=browser.Html5QrcodeSupportedFormats;
@@ -37,7 +47,7 @@ export function createCameraScanner({hostId,onCode,onProgress=()=>{},browser=glo
  let canceled=false,reported=false,closing=null,candidate=null;
  const started=Promise.resolve().then(()=>{
   if(canceled)return;
-  return reader.start({facingMode:'environment'},{fps:10,qrbox:(width,height)=>({width:Math.min(Math.floor(width*.9),340),height:Math.min(Math.floor(height*.45),160)})},(code,result)=>{
+  return reader.start(cameraId||{facingMode:'environment'},{fps:10,qrbox:(width,height)=>({width:Math.min(Math.floor(width*.9),340),height:Math.min(Math.floor(height*.45),160)})},(code,result)=>{
    if(canceled||reported)return;
    const format=result?.result?.format?.formatName;
    if(!validBarcode(code,format)){
@@ -64,6 +74,33 @@ export function createCameraScanner({hostId,onCode,onProgress=()=>{},browser=glo
   })();
   return closing;
  }
- const ready=started.then(async()=>{if(canceled)await stop();});
- return {ready,stop};
+ const ready=started.then(async()=>{
+  if(canceled){await stop();return;}
+  // Focus is optional. Its completion must never delay stopping the camera.
+  try{
+   const modes=reader.getRunningTrackCapabilities?.().focusMode;
+   if(Array.isArray(modes)&&modes.includes('continuous')){
+    Promise.resolve(reader.applyVideoConstraints({advanced:[{focusMode:'continuous'}]})).catch(()=>{});
+   }
+  }catch{}
+ });
+ async function cameraChoices(){
+  await ready;
+  const empty={cameras:[],selectedId:''};
+  if(canceled)return empty;
+  let selectedId=cameraId||'';
+  try{selectedId=reader.getRunningTrackSettings?.().deviceId||selectedId;}catch{}
+  try{
+   // The active stream already granted permission; enumeration opens no stream.
+   const devices=await browser.navigator.mediaDevices.enumerateDevices?.()||[];
+   if(canceled)return empty;
+   const cameras=[],seen=new Set();
+   for(const device of devices){
+    if(device.kind!=='videoinput'||!device.deviceId||seen.has(device.deviceId))continue;
+    seen.add(device.deviceId);cameras.push({id:device.deviceId,label:device.label||'Camera '+(cameras.length+1)});
+   }
+   return {cameras,selectedId};
+  }catch{return canceled?empty:{cameras:[],selectedId};}
+ }
+ return {ready,stop,cameraChoices};
 }
