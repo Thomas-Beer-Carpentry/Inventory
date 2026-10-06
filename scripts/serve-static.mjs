@@ -1,0 +1,5 @@
+import http from 'node:http';import {readFile} from 'node:fs/promises';import {fileURLToPath} from 'node:url';import {resolve,sep,extname} from 'node:path';
+const root=fileURLToPath(new URL('../dist/client/',import.meta.url));
+const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.webmanifest':'application/manifest+json','.png':'image/png','.svg':'image/svg+xml','.json':'application/json'};
+const server=http.createServer(async(request,response)=>{try{const path=decodeURIComponent(new URL(request.url,'http://127.0.0.1:5173').pathname);const target=resolve(root,'.'+(path==='/'?'/index.html':path));if(!target.startsWith(root.replace(/\/$/,'')+sep)){response.writeHead(403);response.end();return;}const body=await readFile(target);response.writeHead(200,{'Content-Type':types[extname(target)]||'application/octet-stream','Cache-Control':'no-store'});response.end(body);}catch{response.writeHead(404);response.end('Not found');}});
+server.on('error',error=>{console.error(error.message);process.exitCode=1;});server.listen(5173,'127.0.0.1',()=>console.log('Authoring preview: http://127.0.0.1:5173'));

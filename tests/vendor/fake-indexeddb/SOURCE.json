@@ -1,0 +1,229 @@
+{
+  "package": "fake-indexeddb",
+  "version": "6.2.5",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/dumbmatter/fakeIndexedDB",
+  "tag": "v6.2.5",
+  "commit": "65f2c04e242550e86f86fcdff17cbee81ae96604",
+  "testOnly": true,
+  "buildMethod": "Node.js 24 node:module.stripTypeScriptTypes(source, {mode:'transform'})",
+  "entry": "esm/index.js",
+  "files": [
+    {
+      "path": "src/FDBCursor.ts",
+      "gitBlobSha": "069a993359f941f45bf99849d05601f825bd09f0",
+      "size": 20427
+    },
+    {
+      "path": "src/FDBCursorWithValue.ts",
+      "gitBlobSha": "cbd98e869610f21dfe24b918dca893982b5e958a",
+      "size": 550
+    },
+    {
+      "path": "src/FDBDatabase.ts",
+      "gitBlobSha": "3dd7bd37c56564fdc4181d47f88ca785a261462f",
+      "size": 9164
+    },
+    {
+      "path": "src/FDBFactory.ts",
+      "gitBlobSha": "2c25b57daf387903160f0e6ab1f73077ac277cb9",
+      "size": 19991
+    },
+    {
+      "path": "src/FDBIndex.ts",
+      "gitBlobSha": "60da35e5f6b2f3ff6dcd5cd7370ba29019fefee4",
+      "size": 10171
+    },
+    {
+      "path": "src/FDBKeyRange.ts",
+      "gitBlobSha": "588de6293105a4a3cad48bf09515f535479d60ef",
+      "size": 2757
+    },
+    {
+      "path": "src/FDBObjectStore.ts",
+      "gitBlobSha": "3efd177d7361fa4cc97a51e7f3c027ff2a37722a",
+      "size": 19475
+    },
+    {
+      "path": "src/FDBOpenDBRequest.ts",
+      "gitBlobSha": "0c0f3206e89982c31bc0cded886192ad3979950e",
+      "size": 359
+    },
+    {
+      "path": "src/FDBRecord.ts",
+      "gitBlobSha": "a5b48e89511b0eea4b5edfd7fea8e68321f46804",
+      "size": 712
+    },
+    {
+      "path": "src/FDBRequest.ts",
+      "gitBlobSha": "095ff7514e8a6c0df9a9a27c69774d6ad5e44f2d",
+      "size": 1330
+    },
+    {
+      "path": "src/FDBTransaction.ts",
+      "gitBlobSha": "adeea1a80ce32e7f0d4dc4cf45f65e8d295f8e66",
+      "size": 11894
+    },
+    {
+      "path": "src/FDBVersionChangeEvent.ts",
+      "gitBlobSha": "9ebcc3e6f5ff994f43e78b2661dd0d9a9734ff69",
+      "size": 697
+    },
+    {
+      "path": "src/fakeIndexedDB.ts",
+      "gitBlobSha": "bed93e2c143b20f0d74f88e505132fd38143c4a8",
+      "size": 114
+    },
+    {
+      "path": "src/forceCloseDatabase.ts",
+      "gitBlobSha": "29fa76c31e624e4300482a73b319609c896e5548",
+      "size": 840
+    },
+    {
+      "path": "src/index.ts",
+      "gitBlobSha": "585e8da2b88b8882db28cb150dc605c0305d1e29",
+      "size": 936
+    },
+    {
+      "path": "src/lib/Database.ts",
+      "gitBlobSha": "20db0fde1f71ce03d55fe9414fec977b8cf71617",
+      "size": 3222
+    },
+    {
+      "path": "src/lib/FakeDOMStringList.ts",
+      "gitBlobSha": "9291f2952462bd372c3f03f50c66bb3218956f04",
+      "size": 1324
+    },
+    {
+      "path": "src/lib/FakeEvent.ts",
+      "gitBlobSha": "a6ad35939008637c686e341f5c380166bedf831a",
+      "size": 1604
+    },
+    {
+      "path": "src/lib/FakeEventTarget.ts",
+      "gitBlobSha": "04f8a5406f1c7121ea5b3e13ecc3376f9909a864",
+      "size": 5878
+    },
+    {
+      "path": "src/lib/Index.ts",
+      "gitBlobSha": "960e82cf02f39edc275e87c97daaa88790dd34b1",
+      "size": 7198
+    },
+    {
+      "path": "src/lib/KeyGenerator.ts",
+      "gitBlobSha": "1af0d9e4d684c1e88d52ffafa394de138d200dfc",
+      "size": 667
+    },
+    {
+      "path": "src/lib/ObjectStore.ts",
+      "gitBlobSha": "d933e53197a5d5dd0a795d22c525b85d2e6c6dbd",
+      "size": 10682
+    },
+    {
+      "path": "src/lib/RecordStore.ts",
+      "gitBlobSha": "0832623c34d6f8e3dcd3ac7629d822d1d6bc0a3a",
+      "size": 4949
+    },
+    {
+      "path": "src/lib/binarySearchTree.ts",
+      "gitBlobSha": "cb6c2bc3814a5714dca008960f98a33c032ab4e1",
+      "size": 12675
+    },
+    {
+      "path": "src/lib/canInjectKey.ts",
+      "gitBlobSha": "87e8df2952d26b6e36c9b7fc70065a4ed52dd068",
+      "size": 1045
+    },
+    {
+      "path": "src/lib/cloneValueForInsertion.ts",
+      "gitBlobSha": "ea126de91a87a476299779932e9214c5ac5d5777",
+      "size": 1200
+    },
+    {
+      "path": "src/lib/closeConnection.ts",
+      "gitBlobSha": "9bc32a1f9173da3fead6d65a9dd8f505a519f512",
+      "size": 1156
+    },
+    {
+      "path": "src/lib/cmp.ts",
+      "gitBlobSha": "0557df5ccf2fa155b8a85dd94dfd455d2185d3cb",
+      "size": 2081
+    },
+    {
+      "path": "src/lib/enforceRange.ts",
+      "gitBlobSha": "0cf3b6c8523acd91d2fa3940c533bf2d4445b6f8",
+      "size": 415
+    },
+    {
+      "path": "src/lib/errors.ts",
+      "gitBlobSha": "a76ad91a3a218c99123ceab326bb51ed23cdb1bc",
+      "size": 3842
+    },
+    {
+      "path": "src/lib/extractGetAllOptions.ts",
+      "gitBlobSha": "7128b79c08c4f45c1fb798dda8e4bcf981fe0de5",
+      "size": 1513
+    },
+    {
+      "path": "src/lib/extractKey.ts",
+      "gitBlobSha": "32c21779b750081d39f00a067d134bc1cab7a43c",
+      "size": 2570
+    },
+    {
+      "path": "src/lib/getKeyPath.ts",
+      "gitBlobSha": "66c0037b2b4946c680037d7b2334f727da5dba38",
+      "size": 571
+    },
+    {
+      "path": "src/lib/intersection.ts",
+      "gitBlobSha": "44d4ca678fb0b9a538b05afd09f259821127e41a",
+      "size": 436
+    },
+    {
+      "path": "src/lib/isPotentiallyValidKeyRange.ts",
+      "gitBlobSha": "cdda4a21614e858c1a1655d95922ea0b114e8f7b",
+      "size": 659
+    },
+    {
+      "path": "src/lib/isSharedArrayBuffer.ts",
+      "gitBlobSha": "0f7866d06f1f6e1c31b318a4a95c7cbcea638894",
+      "size": 210
+    },
+    {
+      "path": "src/lib/scheduling.ts",
+      "gitBlobSha": "3c3c3f2fcb919d36aaa523b6b6b65e007f243b80",
+      "size": 2415
+    },
+    {
+      "path": "src/lib/types.ts",
+      "gitBlobSha": "d5db7210be119751d4ed89a586571c03079c12ee",
+      "size": 1816
+    },
+    {
+      "path": "src/lib/validateKeyPath.ts",
+      "gitBlobSha": "ae02ccca63a6d0e8cd40661848afd19e1c0e00ed",
+      "size": 11457
+    },
+    {
+      "path": "src/lib/validateRequiredArguments.ts",
+      "gitBlobSha": "e4d555cc79fc32e6b120991605d80437d7ff67f0",
+      "size": 575
+    },
+    {
+      "path": "src/lib/valueToKey.ts",
+      "gitBlobSha": "16c086ef6c71a1081dd550d7546875ec26605fd6",
+      "size": 738
+    },
+    {
+      "path": "src/lib/valueToKeyRange.ts",
+      "gitBlobSha": "ab228f30cc50fbe5c4f51ebc6911e08499a248ee",
+      "size": 652
+    },
+    {
+      "path": "src/lib/valueToKeyWithoutThrowing.ts",
+      "gitBlobSha": "9de27e948f7162f20b3788cc34e4edb2fc6ef2e8",
+      "size": 4438
+    }
+  ],
+  "licenseGitBlobSha": "ad44ec8ca3641cddb7e580ade97f9244b71ad40b"
+}

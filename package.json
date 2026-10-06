@@ -1,0 +1,24 @@
+{
+  "name": "workshop-inventory",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node tests/phone-store.test.mjs && node tests/scanner.test.mjs && node tests/decode-raster.mjs && node tests/offline.test.mjs && node tests/android-bridge.test.mjs && node tests/browser-setup.test.mjs",
+    "start": "node scripts/serve-static.mjs",
+    "prestart": "node scripts/build.mjs",
+    "android:check": "node scripts/build-android.mjs --check",
+    "android:build": "node scripts/build-android.mjs",
+    "browser:package": "python3 scripts/package-browser.py"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.10",
+    "drizzle-orm": "0.45.2",
+    "esbuild": "0.25.12",
+    "wrangler": "4.45.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

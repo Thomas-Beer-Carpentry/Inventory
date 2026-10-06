@@ -1,0 +1,10 @@
+import {cp,readFile,writeFile,mkdir,rm} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+await rm('dist',{recursive:true,force:true});await mkdir('dist/.openai',{recursive:true});
+await cp('public','dist/client',{recursive:true});await cp('.openai/hosting.json','dist/.openai/hosting.json');
+const names=['index.html','app.js','phone-store.js','offline.js','android-bridge.js','scanner.js','style.css','manifest.webmanifest','vendor/html5-qrcode.min.js','sw.js','icons/icon-192.png','icons/icon-512.png'];
+const hash=createHash('sha256');for(const name of names)hash.update(await readFile('public/'+name));
+const version=hash.digest('hex').slice(0,16);
+const serviceWorker=(await readFile('public/sw.js','utf8')).replace('__CACHE_VERSION__',version);
+await writeFile('dist/client/sw.js',serviceWorker);
+console.log('Built phone-only offline Workshop app. Inventory stays in phone storage.');

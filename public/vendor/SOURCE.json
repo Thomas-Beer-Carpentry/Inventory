@@ -1,0 +1,17 @@
+{
+  "package": "html5-qrcode",
+  "version": "2.3.8",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/mebjas/html5-qrcode",
+  "commit": "bd41bf14f401bb6d18fef5dc5c2de3e5e060fcc7",
+  "bundle": "minified/html5-qrcode.min.js",
+  "gitBlobSha": "18db263dbdc958f63f14c4904cb7e2124c766ecc",
+  "licenseGitBlobSha": "06900aadc1f392ed5cc260456b6e769f7645bd08",
+  "sourceURL": "https://github.com/mebjas/html5-qrcode/blob/bd41bf14f401bb6d18fef5dc5c2de3e5e060fcc7/minified/html5-qrcode.min.js",
+  "tag": "v2.3.8",
+  "verifiedChecks": [
+    "node --check",
+    "browser-global VM exports",
+    "Exact Git blob SHA"
+  ]
+}

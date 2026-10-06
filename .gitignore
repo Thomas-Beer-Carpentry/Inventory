@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.wrangler/
+.env
+.env.*
+!.env.example
+workshop-backup-*.json
+*.tar.gz
+.local/
+android/build/
+android/signing/
