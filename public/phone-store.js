@@ -15,6 +15,7 @@ function validateBackup(backup){
  });
  const jobs=backup.jobs.map(raw=>{
   const job={id:identifier(raw.id,'job ID'),client:text(raw.client,'client name'),name:text(raw.name,'job description'),address:raw.address?text(raw.address,'address',300):null,status:raw.status,created_at:stamp(raw.created_at)};
+  if(raw.deleted_at!=null)job.deleted_at=stamp(raw.deleted_at);
   if(jobMap.has(job.id)||!['Active','Completed'].includes(job.status))throw new Error('The backup has invalid or duplicate jobs.');jobMap.set(job.id,job);return job;
  });
  const movements=backup.movements.map(raw=>{
@@ -73,7 +74,17 @@ export function createPhoneStore({indexedDB=globalThis.indexedDB,IDBKeyRange=glo
    }
    if(path==='jobs'){const job={id:createId(),client:text(body.client,'client name'),name:text(body.name,'job description'),address:body.address?text(body.address,'address',300):null,status:'Active',created_at:now()};await requestValue(stores.jobs.add(job));return {id:job.id};}
    const status=path.match(/^jobs\/([^/]+)\/status$/);
-   if(status){if(!['Active','Completed'].includes(body.status))throw new Error('Choose a valid job status.');const job=await requestValue(stores.jobs.get(status[1]));if(!job)throw new Error('Job not found.');await requestValue(stores.jobs.put({...job,status:body.status}));return {ok:true};}
+   if(status){if(!['Active','Completed'].includes(body.status))throw new Error('Choose a valid job status.');const job=await requestValue(stores.jobs.get(status[1]));if(!job)throw new Error('Job not found.');if(job.deleted_at)throw new Error('Restore this deleted job before changing its status.');await requestValue(stores.jobs.put({...job,status:body.status}));return {ok:true};}
+   const jobRemoval=path.match(/^jobs\/([^/]+)\/(delete|restore)$/);
+   if(jobRemoval){
+    const job=await requestValue(stores.jobs.get(jobRemoval[1]));if(!job)throw new Error('Job not found.');
+    if(jobRemoval[2]==='delete'){
+     if(!job.deleted_at)await requestValue(stores.jobs.put({...job,status:'Completed',deleted_at:now()}));
+    }else if(job.deleted_at){
+     const restoredJob={...job,status:'Completed'};delete restoredJob.deleted_at;await requestValue(stores.jobs.put(restoredJob));
+    }
+    return {ok:true};
+   }
    if(path==='movements'){
     const {id,itemId,jobId=null,type,quantity}=body;
     if(!/^[a-zA-Z0-9-]{10,80}$/.test(id||''))throw new Error('Please start a new transaction.');
@@ -86,6 +97,7 @@ export function createPhoneStore({indexedDB=globalThis.indexedDB,IDBKeyRange=glo
     const item=await requestValue(stores.items.get(itemId));if(!item)throw new Error('This item could not be found.');
     const job=jobId?await requestValue(stores.jobs.get(jobId)):null;
     if(jobId&&!job)throw new Error('Select a valid job.');
+    if(type==='TAKEN_TO_JOB'&&job.deleted_at)throw new Error('This job was deleted. Select an active destination job.');
     if(type==='TAKEN_TO_JOB'&&job.status!=='Active')throw new Error('Select an active destination job.');
     if(type==='TAKEN_TO_JOB'&&quantity>item.quantity)throw new Error('Insufficient Workshop stock.');
     if(type==='RETURNED_TO_WORKSHOP'){const history=await requestValue(stores.movements.index('job_item').getAll(IDBKeyRange.only([jobId,itemId])));const held=history.reduce((sum,m)=>sum+(m.type==='TAKEN_TO_JOB'?m.quantity:-m.quantity),0);if(quantity>held)throw new Error('Return exceeds materials held by this job.');}

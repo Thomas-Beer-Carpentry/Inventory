@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node tests/phone-store.test.mjs && node tests/scanner.test.mjs && node tests/scanner-library.test.mjs && node tests/scanner-stability.test.mjs && node tests/camera-selection.test.mjs && node tests/camera-ui.test.mjs && node tests/decode-raster.mjs && node tests/offline.test.mjs && node tests/android-bridge.test.mjs && node tests/browser-setup.test.mjs && node tests/pages-compat.test.mjs",
+    "test": "node tests/phone-store.test.mjs && node tests/inventory-stock.test.mjs && node tests/job-removal.test.mjs && node tests/scanner.test.mjs && node tests/scanner-library.test.mjs && node tests/scanner-stability.test.mjs && node tests/camera-selection.test.mjs && node tests/camera-ui.test.mjs && node tests/decode-raster.mjs && node tests/offline.test.mjs && node tests/android-bridge.test.mjs && node tests/browser-setup.test.mjs && node tests/pages-compat.test.mjs",
     "start": "node scripts/serve-static.mjs",
     "prestart": "node scripts/build.mjs",
     "android:check": "node scripts/build-android.mjs --check",
