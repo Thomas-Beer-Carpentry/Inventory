@@ -1,0 +1,43 @@
+# Workshop — Android browser app
+
+Workshop is a browser app for Android Chrome. Stock, jobs, scanning name and permanent material history are stored on the phone in IndexedDB. The barcode decoder is included with the app files. There is no inventory server or stock sync. Initial access to the private installation link may require signing in to your ChatGPT account; the inventory itself uses the scanning name saved on your phone.
+
+The browser package is static and can be installed from its secure hosting link. Phone-camera behavior and actual installed-browser persistence remain unverified on a physical device.
+
+## Install and use on a phone
+
+Android Chrome's live camera and offline installation need a trustworthy browser origin:
+
+- The usual route is an initial **HTTPS** load. Add Workshop to the Home Screen and wait for **Ready offline**. The app's files are then cached on the phone. Stock entry, job history, returns and barcode scanning can run without an internet connection afterward.
+- A local-only route is possible if the phone **already has a local web server**. Extract the browser package into that server's web root and open its fixed `http://localhost:<port>/` or `http://127.0.0.1:<port>/` address in Chrome. These loopback addresses are a secure-context exception; the server must run on the phone, not on a PC or another device. Load the app and wait for Ready offline before testing with that server stopped. Keep the same address/port to keep the same app storage.
+
+Opening `index.html` from Android Files or opening the ZIP directly is not a reliable app installation. Local file/content URLs do not provide this app's root module paths and service-worker setup. An ordinary HTTP address on another device also does not provide the required camera context.
+
+Once installed:
+
+1. Enter the name recorded on transactions.
+2. Add a material and tap **Scan** beside Barcode. Allow camera access, save the material's name/unit, and use **Stock In** for its opening quantity.
+3. Create a job with its client and description. **Stock Out** requires an Active destination job.
+4. Open that job to return unused stock and see its complete history and taken/returned/net material summary.
+
+The scanner supports EAN-13, EAN-8, UPC-A/E, Code 128, Code 39, ITF and QR and prefers the rear camera. Manual barcode entry is also available. First setup reports a failure if service-worker installation fails or offline readiness cannot be confirmed; it does not leave the app waiting indefinitely.
+
+## Keep the records
+
+Use the installed Home Screen app at the same origin consistently. Tap **Saved on this phone / Ready offline** to set the scanning name, download a JSON backup, or restore a backup into an empty inventory. Save backup copies in the phone's Files app before changing phones, clearing browser data or removing the app. Clearing storage or losing the phone removes unbacked-up records. Backups smaller than 20 MB are accepted; validation replays the complete stock history before restoring anything.
+
+Each movement saves Workshop quantity and the permanent audit record in one IndexedDB transaction. Stock-out requires an Active job; returns cannot exceed that job's net materials. Completed jobs keep their history and accept returns. Duplicate confirmations are idempotent. Audit records snapshot item/unit, quantity, date/time, client/job, scanning user and Workshop before/after stock. A recording sequence preserves history order if the phone clock changes.
+
+## Local packaging and verification
+
+```sh
+node scripts/build.mjs
+npm test
+python3 scripts/package-browser.py
+```
+
+The static website is in `dist/client`; the browser ZIP is `dist/workshop-browser.zip`. Serve its app files at the origin root because imports, manifest and service-worker paths start with `/`. The package script rebuilds locally and requires only Node.js 24+ and Python 3; it makes no downloads or network requests. Hosting only serves these files and receives no inventory writes. It is not required during normal use after caching.
+
+Tests cover transactional stock/job rules, returns, failed writes, duplicate confirmations, backup validation, scanner lifecycle, an actual EAN-13 decoder fixture, cached offline resources, and first service-worker installation failure/readiness timeouts. The IndexedDB test substitute is in-memory; physical phone persistence, installed-app airplane-mode launch and camera scanning still need device checks.
+
+The native Android source is retained under `android/`; see `android/README.md` for its separate status. It has not been built into an APK. Legacy SQLite/PC code and Sites configuration are reference source and are not used by the browser inventory. The hosted site serves the static browser app; Workshop inventory is not stored on that host.
