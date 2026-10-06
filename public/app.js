@@ -80,7 +80,9 @@ async function startCamera(){
  const host=area.querySelector('.camera-view');
  const session={host,canceled:false,scanner:null};
  try{
-  session.scanner=createCameraScanner({hostId:host.id,onCode:async code=>{
+  session.scanner=createCameraScanner({hostId:host.id,onProgress:message=>{
+   if(cameraSession===session&&!session.canceled){const status=area.querySelector('[role="status"]');if(status)status.textContent=message;}
+  },onCode:async code=>{
    if(session.canceled||cameraSession!==session)return;
    const input=$('#'+inputId);
    if(!input)return;
@@ -92,7 +94,7 @@ async function startCamera(){
   }});
   cameraSession=session;
   await session.scanner.ready;
-  if(cameraSession===session&&!session.canceled)area.querySelector('[role="status"]').textContent='Position the barcode inside the frame.';
+  if(cameraSession===session&&!session.canceled)area.querySelector('[role="status"]').textContent='Position the full bars inside the frame and hold steady.';
  }catch(error){
   if(session.canceled)return;
   if(cameraSession===session)await stopCamera();else host.remove();

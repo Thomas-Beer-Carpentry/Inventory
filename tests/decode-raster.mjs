@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import {createCameraScanner} from '../public/scanner.js';
 
 // CLI: node decode-raster.mjs [bundle.js] [RGBA-fixture.json]
 // Optional fixture shape: {width,height,rgba:[r,g,b,a,...],expected:"barcode"}.
@@ -58,8 +59,27 @@ assert.equal(result.format.formatName, 'EAN_13');
 assert.equal(result.debugData.decoderName, 'zxing-js');
 console.log(JSON.stringify({decoded: result.text, format: result.format.formatName, decoder: result.debugData.decoderName, width: fixture.width, height: fixture.height}));
 
+// Use the real decoder's metadata at the application boundary. The canonical
+// fixture contains only bars and spaces; it has no printed digits to recognise.
+let at=0,receive;
+const accepted=[];
+class CameraBoundary {
+ start(camera,config,success){receive=success;}
+ clear(){}
+}
+const adapter=createCameraScanner({hostId:'fixture',onCode:code=>accepted.push(code),browser:{
+ isSecureContext:true,performance:{now:()=>at},navigator:{mediaDevices:{getUserMedia(){}}},
+ Html5Qrcode:CameraBoundary,Html5QrcodeSupportedFormats:context.Html5QrcodeSupportedFormats,
+}});
+await adapter.ready;
+const decoded={decodedText:result.text,result};
+receive(result.text,decoded);assert.deepEqual(accepted,[]);
+at=125;receive(result.text,decoded);assert.deepEqual(accepted,[]);
+at=250;receive(result.text,decoded);assert.deepEqual(accepted,[result.text]);
+await adapter.stop();
+console.log('Bar-only raster result accepted only after repeated verification.');
+
 // White pixels must not decode as the previous barcode.
 rgba.fill(255);
 await assert.rejects(scanner.qrcode.decodeAsync(canvas));
 console.log('Blank raster rejected.');
-
