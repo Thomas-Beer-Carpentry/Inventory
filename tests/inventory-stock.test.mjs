@@ -131,6 +131,7 @@ async function app(t,{source=appSource,setup=async()=>{}}={}){
  return {...f,document,controller,apiCalls,scanners,navigate(hash){location.hash='#'+hash;for(const handler of windowHandlers.get('hashchange')||[])handler();},submit(){const form=document.querySelector('#modal-form');assert.ok(form,'The actual app must render its form');return form.requestSubmit();}};
 }
 const stockIds=h=>Array.from(h.controller.visibleStockItems(),item=>item.id).sort();
+const stockRows=h=>h.document.querySelector('#inventory-results').querySelectorAll('.stock-row');
 const options=h=>h.document.querySelector('#manual-item').querySelectorAll('option').map(option=>option.value).filter(Boolean).sort();
 const itemWrites=h=>h.apiCalls.filter(call=>call.path==='items');
 function assertStockCounts(h,count){
@@ -165,15 +166,66 @@ test('Workshop render and live search show only positive stock while counts excl
  const rows=()=>h.document.querySelector('#inventory-results').innerHTML;
  assert.match(rows(),/90x45 Timber/);assert.match(rows(),/Numeric alias/);
  assert.doesNotMatch(rows(),/90mm Galvanised Nails|Never stocked/);
+ assert.equal(stockRows(h).length,2);
  assert.deepEqual(stockIds(h),positive);
  h.document.input('inventory-search','GaLvAnIsEd');assert.deepEqual(stockIds(h),[]);
- assert.doesNotMatch(rows(),/<tbody>|90mm Galvanised Nails/);assertStockCounts(h,2);
+ assert.equal(stockRows(h).length,0);assert.doesNotMatch(rows(),/90mm Galvanised Nails/);assertStockCounts(h,2);
  h.document.input('inventory-search','TiMbEr');assert.deepEqual(stockIds(h),[h.timber]);
+ assert.equal(stockRows(h).length,1);
  assert.match(rows(),/90x45 Timber/);assert.doesNotMatch(rows(),/Numeric alias|Galvanised/);
- h.document.input('inventory-search',barcode);assert.deepEqual(stockIds(h),[]);assert.doesNotMatch(rows(),/<tbody>/);
+ h.document.input('inventory-search',barcode);assert.deepEqual(stockIds(h),[]);assert.equal(stockRows(h).length,0);
  h.document.input('inventory-search','');assert.deepEqual(stockIds(h),positive);
  assert.equal((await h.store.request('state')).items.length,4);
 });
+
+test('Workshop stock puts quantities first without displaying barcodes and keeps barcode search and row Stock In working',async t=>{
+ const h=await app(t),results=h.document.querySelector('#inventory-results'),list=results.querySelector('.stock-list');
+ assert.ok(list,'Workshop inventory must render its compact stock list');assert.equal(list.tagName,'ul');assert.equal(results.querySelector('table'),null);
+ const state=await h.store.request('state');assert.equal(stockRows(h).length,2);
+ for(const row of stockRows(h)){
+  assert.equal(row.tagName,'li');const children=row.children.filter(child=>child.tagName!=='#text');
+  const quantity=row.querySelector('.stock-quantity'),material=row.querySelector('.stock-material'),button=row.querySelector('button');
+  assert.equal(children[0],quantity,'Quantity must precede the material and action in each row');
+  const item=state.items.find(item=>item.id===button.dataset.item);assert.ok(item);assert.equal(button.dataset.action,'stockin');
+  assert.match(quantity.textContent.trim(),new RegExp('^'+item.quantity+'\\s*'+item.unit+'$'));
+  assert.equal(material.querySelector('strong').textContent,item.name);assert.ok(children.indexOf(material)>children.indexOf(quantity));
+  const last=state.movements.filter(movement=>movement.item_id===item.id).at(-1);
+  assert.ok(material.textContent.includes(new Intl.DateTimeFormat(undefined,{day:'numeric',month:'short',year:'numeric'}).format(new Date(last.created_at))));
+  assert.equal(row.textContent.includes(item.barcode),false,'Barcode is retained for matching, without appearing in the stock row');
+ }
+ h.document.input('inventory-search',aliasBarcode);assert.equal(stockRows(h).length,1);
+ const row=stockRows(h)[0];assert.match(row.textContent,/Numeric alias/);assert.equal(row.textContent.includes(aliasBarcode),false);
+ const action=row.querySelector('button');h.document.dispatch('click',{target:action});
+ assert.deepEqual([h.controller.currentDraft().kind,h.controller.currentDraft().type,h.controller.currentDraft().itemId,h.controller.currentDraft().step],['move','STOCK_IN',h.alias,2]);
+ await confirmQuantity(h,2);
+ const replenished=await h.store.request('state');assert.equal(replenished.items.find(item=>item.id===h.alias).quantity,3);
+ assert.equal(replenished.items.find(item=>item.id===h.alias).barcode,aliasBarcode);assert.equal(itemWrites(h).length,0);
+ assert.equal(stockRows(h).length,1);assert.equal(stockRows(h)[0].querySelector('.stock-quantity').textContent.replace(/\s/g,''),'3packs');
+});
+
+for(const {unit,title,label,code} of [{unit:'bottles',title:'Bottle',label:/^bottles?$/i,code:'BOTTLE-NEW-0001'},{unit:'tubs',title:'Tub',label:/^tubs?$/i,code:'TUB-NEW-0001'}]){
+ test('Adding a '+title+' material saves its plural unit through Stock In, job take, return and reopen',async t=>{
+  const h=await app(t);h.document.clickRendered('newitem');
+  const option=h.document.querySelector('#item-unit').querySelectorAll('option').find(option=>option.value===unit);
+  assert.ok(option,title+' must be selectable in Add Material');assert.match(option.textContent.trim(),label);
+  h.document.input('item-name',title+' material');h.document.input('item-barcode',code);h.document.input('item-unit',option.value);assert.equal(h.submit(),true);
+  await until(()=>h.controller.currentDraft()?.kind==='move'&&h.controller.currentDraft()?.step===2);
+  const itemId=h.controller.currentDraft().itemId;let state=await h.store.request('state');
+  assert.deepEqual([state.items.find(item=>item.id===itemId).unit,state.items.find(item=>item.id===itemId).quantity],[unit,0]);
+  await confirmQuantity(h,3);h.document.clickRendered('done');
+  let row=stockRows(h).find(row=>row.querySelector('button').dataset.item===itemId);assert.ok(row);
+  assert.equal(row.querySelector('.stock-quantity').textContent.replace(/\s/g,''),'3'+unit);assert.equal(row.textContent.includes(code),false);
+  h.document.click('stockout');h.document.input('manual-item',itemId);assert.equal(h.submit(),true);
+  await until(()=>h.controller.currentDraft()?.step===2);h.document.input('move-job',h.job);await confirmQuantity(h,1);h.document.clickRendered('done');
+  h.navigate('job/'+h.job);h.document.clickRendered('return');h.document.input('manual-item',itemId);assert.equal(h.submit(),true);
+  await until(()=>h.controller.currentDraft()?.step===2);await confirmQuantity(h,1);
+  state=await h.store.request('state');assert.equal(state.items.find(item=>item.id===itemId).unit,unit);assert.equal(state.items.find(item=>item.id===itemId).quantity,3);
+  assert.deepEqual(state.movements.filter(movement=>movement.item_id===itemId).map(movement=>[movement.type,movement.unit,movement.before,movement.after]),[['STOCK_IN',unit,0,3],['TAKEN_TO_JOB',unit,3,2],['RETURNED_TO_WORKSHOP',unit,2,3]]);
+  const backup=await h.store.request('export');assert.equal(backup.items.find(item=>item.id===itemId).unit,unit);
+  await h.store.close();const reopened=createPhoneStore({indexedDB:h.indexedDB,IDBKeyRange,databaseName:h.databaseName});t.after(()=>reopened.close());
+  const remembered=await reopened.request('state');assert.deepEqual(remembered.items,state.items);assert.deepEqual(remembered.movements,state.movements);
+ });
+}
 
 test('Confirming the last Stock Out removes its Workshop row while Stock In keeps the entire catalog selectable',async t=>{
  const h=await app(t);h.document.click('stockout',{job:h.job});h.document.input('manual-item',h.alias);assert.equal(h.submit(),true);

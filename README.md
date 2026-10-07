@@ -30,6 +30,8 @@ Once installed:
 
 The Workshop stock list and material count show only materials with a quantity greater than zero. When the last quantity is taken to a job, the row disappears. Its saved material name, unit, barcode and transaction history remain on the phone. Stock In can select these saved materials, and a return makes the row appear again.
 
+Stock rows show a large quantity first, then the material name and last movement, with Stock In alongside. They wrap to fit the phone screen without horizontal scrolling. Barcodes remain saved and searchable but are hidden from the stock list. Material units include bottles and tubs.
+
 Descriptions are needed only when registering a new barcode. Scanning or typing an already saved barcode in Add Material opens Stock In for that existing material, ready for a quantity. Barcodes remain text, including leading zeroes, and the saved name and unit are reused.
 
 Open a job and choose **Delete job** to remove it and its material list from Active and Completed jobs. It moves to **Deleted**, retaining the permanent transactions visible in Activity. Deletion does not change Workshop quantities or automatically return materials. Deleted jobs cannot receive new stock-outs; their history still allows bounded returns of unused materials. **Restore job** puts the job in Completed, where it can be reopened explicitly.
