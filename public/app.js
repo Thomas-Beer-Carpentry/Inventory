@@ -9,6 +9,8 @@ let data={items:[],jobs:[],movements:[],user:{name:'Workshop user'}},loadError='
 const $=(s)=>document.querySelector(s);
 const date=(d,full=false)=>new Intl.DateTimeFormat(undefined,full?{day:'numeric',month:'short',year:'numeric',hour:'numeric',minute:'2-digit'}:{day:'numeric',month:'short',year:'numeric'}).format(new Date(d));
 const day=(d)=>new Date(d).toDateString();
+const materialValue=value=>String(value||'').normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();
+const hasBarcode=(item,barcode)=>!!barcode&&(item.barcode===barcode||item.barcode_aliases?.includes(barcode));
 const label={STOCK_IN:'STOCK IN',TAKEN_TO_JOB:'TAKEN TO JOB',RETURNED_TO_WORKSHOP:'RETURNED TO WORKSHOP'};
 const tag=(t)=>`<span class="type-tag ${t==='TAKEN_TO_JOB'?'out':t==='STOCK_IN'?'in':'return'}">${icon(t==='TAKEN_TO_JOB'?'out':t==='STOCK_IN'?'in':'return')}${label[t]}</span>`;
 const net=(jobId,itemId)=>data.movements.filter(m=>m.job_id===jobId&&m.item_id===itemId).reduce((n,m)=>n+(m.type==='TAKEN_TO_JOB'?m.quantity:-m.quantity),0);
@@ -21,7 +23,7 @@ function route(){const r=location.hash.slice(1)||'inventory';return r.split('/')
 function render(){const [view,id]=route();const isJob=view==='job';const nav=view==='jobs'||isJob?'jobs':view==='activity'?'activity':'inventory';const activeJobs=data.jobs.filter(j=>!j.deleted_at&&j.status==='Active');const name=data.user.name||'Workshop user';
 $('#app').innerHTML=`<div class="shell"><aside class="sidebar"><a class="brand" href="#inventory"><span class="brand-mark">${icon('home')}</span><div><strong>workshop</strong><small>STOCK & JOBS</small></div></a><div class="nav-label">ON THIS PHONE</div><nav class="nav" aria-label="Main navigation"><a href="#inventory" class="${nav==='inventory'?'active':''}">${icon('box')}<span>Workshop</span></a><a href="#jobs" class="${nav==='jobs'?'active':''}">${icon('jobs')}<span>Jobs</span><span class="count">${activeJobs.length}</span></a><a href="#activity" class="${nav==='activity'?'active':''}">${icon('activity')}<span>Activity</span></a></nav><div class="home-card">${icon('home')}<div><strong>Workshop</strong><span>Your home base</span></div></div><div class="profile"><div class="avatar">${esc(name.split(/[\s@]+/).slice(0,2).map(s=>s[0]).join('').toUpperCase())}</div><div class="who"><strong title="${esc(name)}">${esc(name)}</strong><small>Saved on this phone</small></div></div></aside><main class="main"><header class="topbar"><div class="mobile-brand"><span class="brand-mark">${icon('home')}</span>workshop</div><div class="breadcrumb">Workspace <span>/</span> <b>${nav==='inventory'?'Workshop':nav==='jobs'?'Jobs':'Activity'}</b>${isJob?'<span>/</span> Material record':''}</div><button type="button" class="phone-status" data-action="phonedata" title="Phone data and backups">${icon('shield')}<span id="offline-status">${esc(offlineStatus)}</span></button><div class="date">${icon('calendar')}${new Intl.DateTimeFormat(undefined,{weekday:'short',day:'numeric',month:'short',year:'numeric'}).format(new Date())}</div></header><div class="content">${loadError?`<div class="banner error-banner" role="alert">${esc(loadError)} ${button('refresh','Try again','','small')}</div>`:''}${loading?'<div class="loading">Loading inventory…</div>':isJob?jobDetail(id):nav==='jobs'?jobsView():nav==='activity'?activityView():inventoryView()}</div></main></div>`;}
 function stockedItems(){return data.items.filter(item=>item.quantity>0);}
-function visibleStockItems(){return stockedItems().filter(item=>(item.name+' '+(item.barcode||'')).toLowerCase().includes(search.toLowerCase()));}
+function visibleStockItems(){return stockedItems().filter(item=>[item.name,item.barcode||'',...(item.barcode_aliases||[])].join(' ').toLowerCase().includes(search.toLowerCase()));}
 function inventoryView(){const active=data.jobs.filter(j=>!j.deleted_at&&j.status==='Active');const today=data.movements.filter(m=>day(m.created_at)===day(new Date()));const stock=stockedItems(),rows=visibleStockItems();
 return `<div class="page-head"><div><div class="title-line"><h1>Workshop</h1><span class="location-tag">HOME BASE</span></div><p class="sub">Your stock, ready for the next job.</p></div><div class="actions">${button('stockin','Stock in','in')}${button('stockout','Stock out','out','primary')}</div></div><div class="stats">${stat('Materials in stock',data.items.filter(i=>i.quantity>0).length,'Across your Workshop','box')}${stat('Active jobs',active.length,'Materials tracked by client','jobs')}${stat('Movements today',today.length,'Every movement accounted for','activity')}</div><div class="work-grid"><section class="panel"><div class="panel-title"><div><h2>Workshop inventory</h2><p class="meta">${stock.length} material${stock.length!==1?'s':''} in stock</p></div>${button('newitem','Add item','plus','small')}</div><div class="toolbar"><label class="search">${icon('search')}<input id="inventory-search" type="search" placeholder="Search item or barcode…" aria-label="Search inventory" value="${esc(search)}"></label><span class="muted">${stock.length} items in stock</span></div><div id="inventory-results">${inventoryRows(rows)}</div><div class="table-foot"><span>Workshop is your stock location</span><span>${icon('shield').replace('<svg','<svg style="width:13px;height:13px;vertical-align:middle"')} Saved on this phone</span></div></section><div class="aside-panels"><section class="panel side-panel"><div class="panel-title"><h2>Active jobs <span class="muted">${active.length}</span></h2><a class="text-link" href="#jobs">View all</a></div>${active.length?`<div class="job-list">${active.slice(0,4).map(j=>`<a href="#job/${j.id}" class="mini-job"><div class="mini-job-top"><span class="job-icon">${icon('jobs')}</span><strong>${esc(j.client)}</strong></div><p>${esc(j.name)}</p><small>${data.movements.filter(m=>m.job_id===j.id).length} material movements</small></a>`).join('')}</div>`:empty('Your next job starts here','Create a job to assign materials to a client.',button('newjob','Create a job','plus','small'),true)}</section><div class="side-note">${icon('shield')}<h3>Every item has a destination</h3><p>Stock leaves the Workshop for a job. Unused materials come back through that job’s return record.</p></div></div></div>`;}
 function stat(title,value,note,ic){return `<div class="stat"><div><span class="stat-label">${title}</span><strong>${value}</strong><span class="stat-note">${note}</span></div><span class="stat-icon">${icon(ic)}</span></div>`;}
@@ -44,18 +46,29 @@ function closeModal(){if(draft?.busy)return;stopCamera();draft=null;$('#modal-ro
 function modalFrame(title,subtitle,body,footer){stopCamera();$('#modal-root').innerHTML=`<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-header"><div><h2 id="modal-title">${title}</h2><p>${subtitle}</p></div><button class="icon-btn" data-action="close" aria-label="Close dialog">${icon('close')}</button></div><form id="modal-form"><div class="modal-body">${draft.error?`<div class="form-error" role="alert">${esc(draft.error)}</div>`:''}${body}</div><div class="modal-footer">${footer}</div></form></section></div>`;setTimeout(()=>$('.modal input, .modal select, .modal-footer .primary, .modal-footer .lime')?.focus(),0);}
 const field=(id,title,input,help='')=>`<div class="field"><label for="${id}">${title}</label>${input}${help?`<small>${help}</small>`:''}</div>`;
 function openMove(type,jobId=null,itemId=null){draft={kind:'move',type,jobId,itemId,step:itemId?2:1,quantity:1,id:crypto.randomUUID(),error:'',busy:false};showModal();}
+function captureMaterialFields(){
+ if(draft?.kind!=='item'||draft.step!==1)return;
+ for(const [key,id] of [['name','item-name'],['unit','item-unit'],['quantity','item-qty'],['barcode','item-barcode'],['selectedItemId','item-existing']]){
+  const input=$('#'+id);if(input)draft[key]=input.value;
+ }
+}
+function reuseSavedMaterial(item){
+ draft.name=item.name;draft.unit=item.unit;draft.itemId=item.id;draft.selectedItemId=item.id;
+ draft.materialRevision=(draft.materialRevision||0)+1;
+ const name=$('#item-name'),unit=$('#item-unit'),existing=$('#item-existing');
+ if(name){name.value=item.name;name.readOnly=true;}
+ if(unit){
+  if(!Array.from(unit.querySelectorAll('option')).some(option=>option.value===item.unit))unit.innerHTML+=`<option value="${esc(item.unit)}">${esc(item.unit)}</option>`;
+  unit.value=item.unit;unit.disabled=true;
+ }
+ if(existing)existing.value=item.id;
+}
 function reuseSavedBarcode(code){
  const barcode=String(code||'').trim();
  if(!barcode||draft?.kind!=='item'||draft.step!==1)return false;
- const item=data.items.find(item=>item.barcode===barcode);
+ const item=data.items.find(item=>hasBarcode(item,barcode));
  if(!item)return false;
- draft.name=item.name;draft.unit=item.unit;draft.itemId=item.id;
- const name=$('#item-name'),unit=$('#item-unit');
- if(name)name.value=item.name;
- if(unit){
-  if(!Array.from(unit.querySelectorAll('option')).some(option=>option.value===item.unit))unit.innerHTML+=`<option value="${esc(item.unit)}">${esc(item.unit)}</option>`;
-  unit.value=item.unit;
- }
+ reuseSavedMaterial(item);
  return true;
 }
 function renderModal(){if(!draft)return;const cancel=button('close','Cancel');const next=`<button type="submit" class="btn primary" ${draft.busy?'disabled':''}>${draft.busy?'Saving…':'Continue'}</button>`;
@@ -63,6 +76,7 @@ if(draft.kind==='phone'){
 modalFrame('Phone data','Your inventory and history stay on this phone.',field('operator-name','Name recorded on transactions',`<input id="operator-name" name="name" required maxlength="160" autocomplete="given-name" placeholder="e.g. Eryk" value="${esc(draft.name||'')}">`)+`<div class="summary-box"><p class="help" style="margin:0">${isAndroidApp()?'This Android app works without internet. Stock, jobs and scanning stay on this phone.':'Install Workshop on your Home Screen. Wait for “Ready offline” before using it without internet.'}</p><p class="help" style="margin:12px 0 0">Download a backup before switching phones or clearing browser data.</p></div><div class="phone-backups">${button('exportbackup',isAndroidApp()?'Save backup':'Download backup','out','')}${isAndroidApp()?button('restorebackup','Restore backup','in'):`<label class="btn" for="restore-backup">${icon('in')}Restore backup</label><input id="restore-backup" type="file" accept="application/json,.json" hidden>`}</div><p class="help" style="margin-top:12px;margin-bottom:0">Backups restore into an empty inventory. Existing history is kept.</p>`,cancel+`<button type="submit" class="btn primary" ${draft.busy?'disabled':''}>${draft.busy?'Saving…':'Save name'}</button>`);return;
 }
 if(draft.kind==='item'){
+ draft.materialRevision=(draft.materialRevision||0)+1;
  if(draft.step===2){
   const before=data.items.find(item=>item.id===draft.itemId)?.quantity||0;
   modalFrame('Confirm material and stock','Review the material and quantity before saving.',`<div class="summary-box"><div class="summary-row"><span>Material</span><strong>${esc(draft.name)}</strong></div><div class="summary-row"><span>Quantity</span><strong>${draft.quantity} ${esc(draft.unit)}</strong></div><div class="summary-row"><span>Destination</span><strong>Workshop</strong></div><div class="summary-row"><span>Scanned by</span><strong>${esc(data.user.name)}</strong></div><div class="stock-change"><span>Workshop stock</span><div><b>${before}</b><span class="arrow">→</span><b>${before+draft.quantity}</b> ${esc(draft.unit)}</div></div></div><p class="help">The material and this stock-in transaction are saved together with the date and time.</p>`,button('backstep','Back')+`<button class="btn lime" type="submit" ${draft.busy?'disabled':''}>${icon('check')}${draft.busy?'Saving…':'Confirm stock in'}</button>`);
@@ -70,7 +84,8 @@ if(draft.kind==='item'){
  }
  const units=['boxes','lengths','bags','rolls','pieces','sheets','packs','litres','metres','bottles','tubs'];
  if(draft.unit&&!units.includes(draft.unit))units.push(draft.unit);
- modalFrame('Add a material','Enter the material and quantity. A barcode is optional.',field('item-name','Material name',`<input id="item-name" name="name" maxlength="160" placeholder="e.g. 90mm Galvanised Nails" value="${esc(draft.name||'')}">`)+field('item-unit','Unit',`<select id="item-unit" name="unit">${units.map(u=>`<option value="${esc(u)}" ${draft.unit===u?'selected':''}>${esc(u)}</option>`).join('')}</select>`)+field('item-qty','Quantity',`<input id="item-qty" name="quantity" type="number" min="1" max="1000000" step="1" required value="${esc(draft.quantity??1)}">`,'Added to Workshop stock when you confirm.')+field('item-barcode','Barcode <span class="muted">(optional)</span>',`<div class="inline-field"><input id="item-barcode" name="barcode" maxlength="100" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Scan, enter, or leave blank" value="${esc(draft.barcode||'')}"><button type="button" class="btn" data-action="camera" aria-label="Scan barcode with camera">${icon('camera')}Scan</button></div>`,'Saved barcodes reuse their material name and unit.')+'<div id="camera-area"></div>',cancel+next);
+ const saved=!!draft.selectedItemId;
+ modalFrame('Add a material','Choose a saved material or enter a new one, then add the quantity.',field('item-existing','Material',`<select id="item-existing" name="selectedItemId"><option value="">New material</option>${data.items.map(item=>`<option value="${esc(item.id)}" ${draft.selectedItemId===item.id?'selected':''}>${esc(item.name)} · ${item.quantity} ${esc(item.unit)} in Workshop</option>`).join('')}</select>`,'Saved materials include those currently out of stock.')+field('item-name','Material name',`<input id="item-name" name="name" maxlength="160" ${saved?'readonly':''} placeholder="e.g. 90mm Galvanised Nails" value="${esc(draft.name||'')}">`)+field('item-unit','Unit',`<select id="item-unit" name="unit" ${saved?'disabled':''}>${units.map(u=>`<option value="${esc(u)}" ${draft.unit===u?'selected':''}>${esc(u)}</option>`).join('')}</select>`)+field('item-qty','Quantity',`<input id="item-qty" name="quantity" type="number" min="1" max="1000000" step="1" required value="${esc(draft.quantity??1)}">`,'Added to Workshop stock when you confirm.')+field('item-barcode','Barcode <span class="muted">(optional)</span>',`<div class="inline-field"><input id="item-barcode" name="barcode" maxlength="100" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Scan, enter, or leave blank" value="${esc(draft.barcode||'')}"><button type="button" class="btn" data-action="camera" aria-label="Scan barcode with camera">${icon('camera')}Scan</button></div>`,'Saved barcodes reuse their material name and unit.')+'<div id="camera-area"></div>',cancel+next);
  return;
 }
 if(draft.kind==='job'){modalFrame('Create a job','Track materials against a client and job.',field('job-client','Client name',`<input id="job-client" name="client" required maxlength="160" placeholder="e.g. Caroline" value="${esc(draft.client||'')}">`)+field('job-name','Job name / description',`<input id="job-name" name="name" required maxlength="160" placeholder="e.g. Fence Replacement" value="${esc(draft.name||'')}">`)+field('job-address','Job address <span class="muted">(optional)</span>',`<input id="job-address" name="address" maxlength="300" placeholder="Street address" value="${esc(draft.address||'')}">`),cancel+`<button class="btn primary" type="submit" ${draft.busy?'disabled':''}>${draft.busy?'Saving…':'Create job'}</button>`);return;}
@@ -83,25 +98,32 @@ const selected=`<div class="selected-item"><span class="item-icon">${icon('box')
 if(draft.step===2){const active=data.jobs.filter(j=>!j.deleted_at&&j.status==='Active');modalFrame(titles[draft.type],'Confirm the quantity and destination.',steps+selected+field('move-qty',`Quantity <span class="muted">(${esc(item.unit)})</span>`,`<input id="move-qty" name="quantity" type="number" min="1" max="1000000" step="1" required value="${draft.quantity}">`,draft.type==='RETURNED_TO_WORKSHOP'?`${net(draft.jobId,item.id)} ${esc(item.unit)} still assigned to this job.`:draft.type==='TAKEN_TO_JOB'?`Available: ${item.quantity} ${esc(item.unit)}`:'Stock will be added to the Workshop.')+(draft.type==='TAKEN_TO_JOB'?field('move-job','Destination job <span style="color:#987a47">*</span>',`<select id="move-job" name="jobId" required><option value="">Select a client / job…</option>${active.map(j=>`<option value="${j.id}" ${draft.jobId===j.id?'selected':''}>${esc(j.client)} — ${esc(j.name)}</option>`).join('')}</select>`,active.length?'':'Create an active job before taking stock out.'):draft.type==='RETURNED_TO_WORKSHOP'?`<div class="summary-box"><div class="summary-row"><span>Returned from</span><strong>${esc(j.client)}<br>${esc(j.name)}</strong></div></div>`:'<p class="help">Returning materials from a job? Use Return Stock in that job so its net total stays accurate.</p>'),button('backstep','Back')+next);return;}
 const after=item.quantity+(draft.type==='TAKEN_TO_JOB'?-draft.quantity:draft.quantity);modalFrame(titles[draft.type],'Review this movement before saving.',steps+`<div class="summary-box"><div class="summary-row"><span>Material</span><strong>${esc(item.name)}</strong></div><div class="summary-row"><span>Quantity</span><strong>${draft.quantity} ${esc(item.unit)}</strong></div><div class="summary-row"><span>${draft.type==='TAKEN_TO_JOB'?'Destination':draft.type==='RETURNED_TO_WORKSHOP'?'Returned from':'Destination'}</span><strong>${j?esc(j.client)+'<br>'+esc(j.name):'Workshop'}</strong></div><div class="summary-row"><span>Scanned by</span><strong>${esc(data.user.name)}</strong></div><div class="stock-change"><span>Workshop stock</span><div><b>${item.quantity}</b><span class="arrow">→</span><b>${after}</b> ${esc(item.unit)}</div></div></div><p class="help">This movement will be saved with the date and time in your permanent transaction history.</p>`,button('backstep','Back')+`<button type="submit" class="btn lime" ${draft.busy?'disabled':''}>${icon('check')}${draft.busy?'Saving…':'Confirm '+(draft.type==='TAKEN_TO_JOB'?'stock out':draft.type==='RETURNED_TO_WORKSHOP'?'return':'stock in')}</button>`);}
 async function submit(event){event.preventDefault();if(!draft||draft.busy||draft.step===4)return;const form=new FormData(event.target);draft.error='';try{
-if(draft.kind==='move'&&draft.step===1){draft.barcode=String(form.get('barcode')||'').trim();const i=draft.barcode?data.items.find(i=>i.barcode===draft.barcode):data.items.find(i=>i.id===form.get('itemId'));if(!i)throw new Error(draft.barcode?'Barcode not found. Add this material to the Workshop first.':'Scan a barcode or select a material.');if(draft.type==='RETURNED_TO_WORKSHOP'&&net(draft.jobId,i.id)<1)throw new Error('This material has no quantity assigned to this job.');if(draft.type==='TAKEN_TO_JOB'&&i.quantity<1)throw new Error('This material has no Workshop stock. Use Stock In to replenish it.');draft.itemId=i.id;draft.step=2;stopCamera();renderModal();return;}
+if(draft.kind==='move'&&draft.step===1){draft.barcode=String(form.get('barcode')||'').trim();const i=draft.barcode?data.items.find(i=>hasBarcode(i,draft.barcode)):data.items.find(i=>i.id===form.get('itemId'));if(!i)throw new Error(draft.barcode?'Barcode not found. Add this material to the Workshop first.':'Scan a barcode or select a material.');if(draft.type==='RETURNED_TO_WORKSHOP'&&net(draft.jobId,i.id)<1)throw new Error('This material has no quantity assigned to this job.');if(draft.type==='TAKEN_TO_JOB'&&i.quantity<1)throw new Error('This material has no Workshop stock. Use Stock In to replenish it.');draft.itemId=i.id;draft.step=2;stopCamera();renderModal();return;}
 if(draft.kind==='move'&&draft.step===2){draft.quantity=Number(form.get('quantity'));if(!Number.isSafeInteger(draft.quantity)||draft.quantity<1)throw new Error('Enter a whole quantity greater than zero.');if(draft.type==='TAKEN_TO_JOB'){draft.jobId=String(form.get('jobId')||'');if(!draft.jobId)throw new Error('Select a destination job.');if(draft.quantity>data.items.find(i=>i.id===draft.itemId).quantity)throw new Error('This quantity exceeds available Workshop stock.');}if(draft.type==='RETURNED_TO_WORKSHOP'&&draft.quantity>net(draft.jobId,draft.itemId))throw new Error('This quantity exceeds the materials held by this job.');draft.step=3;renderModal();return;}
 if(draft.kind==='item'&&draft.step===1){
  for(const [key,value] of form)draft[key]=value;
  draft.barcode=String(draft.barcode||'').trim();draft.quantity=Number(draft.quantity);
  if(draft.barcode.length>100)throw new Error('Enter a barcode of 100 characters or fewer, or leave it blank.');
  if(!Number.isSafeInteger(draft.quantity)||draft.quantity<1||draft.quantity>1000000)throw new Error('Enter a whole quantity between 1 and 1000000.');
+ const selected=draft.selectedItemId?data.items.find(item=>item.id===draft.selectedItemId):null;
+ if(draft.selectedItemId&&!selected)throw new Error('Choose a saved material from the dropdown.');
+ const barcodeItem=draft.barcode?data.items.find(item=>hasBarcode(item,draft.barcode)):null;
+ if(selected&&barcodeItem&&selected.id!==barcodeItem.id)throw new Error('That barcode belongs to a different material. Choose the correct material.');
  draft.itemId=null;
- if(!reuseSavedBarcode(draft.barcode)){
+ if(selected||barcodeItem){reuseSavedMaterial(selected||barcodeItem);}else{
   draft.name=String(draft.name||'').trim();draft.unit=String(draft.unit||'boxes').trim();
   if(!draft.name||draft.name.length>160)throw new Error('Enter a valid material name.');
   if(!draft.unit||draft.unit.length>30)throw new Error('Choose a valid unit.');
+  const matches=data.items.filter(item=>materialValue(item.name)===materialValue(draft.name)&&materialValue(item.unit)===materialValue(draft.unit));
+  if(matches.length>1)throw new Error('More than one saved material matches. Choose it from the dropdown.');
+  if(matches.length)reuseSavedMaterial(matches[0]);
  }
  draft.step=2;stopCamera();renderModal();return;
 }
 if(draft.kind==='job'||draft.kind==='phone'){for(const [key,value] of form)draft[key]=value;}
 draft.busy=true;renderModal();
 if(draft.kind==='phone'){await api('operator',{name:draft.name});draft.busy=false;closeModal();await refresh();toast('Scanning name saved on this phone');return;}
-if(draft.kind==='item'){const result=await api('items/stock-in',{id:draft.id,name:draft.name,barcode:draft.barcode||null,unit:draft.unit,quantity:draft.quantity});draft.busy=false;closeModal();await refresh();toast(result.movement.quantity+' '+result.movement.unit+' added to Workshop');return;}
+if(draft.kind==='item'){const result=await api('items/stock-in',{id:draft.id,itemId:draft.itemId||null,name:draft.name,barcode:draft.barcode||null,unit:draft.unit,quantity:draft.quantity});draft.busy=false;closeModal();await refresh();toast(result.movement.quantity+' '+result.movement.unit+' added to Workshop');return;}
 if(draft.kind==='job'){const result=await api('jobs',{client:draft.client,name:draft.name,address:draft.address});draft.busy=false;closeModal();await refresh();location.hash='job/'+result.id;toast('Job created');return;}
 if(draft.kind==='jobremove'){const action=draft.action;await api('jobs/'+draft.jobId+'/'+action,{});draft.busy=false;closeModal();await refresh();jobFilter=action==='delete'?'Active':'Completed';if(action==='delete'){location.hash='jobs';render();}toast(action==='delete'?'Job deleted. Its permanent history is kept.':'Job restored to Completed jobs');return;}
 if(draft.kind==='status'){await api('jobs/'+draft.jobId+'/status',{status:draft.status});draft.busy=false;closeModal();await refresh();toast('Job status updated');return;}
@@ -142,11 +164,12 @@ async function startCamera(cameraId=readCameraPreference(),remember=false,allowF
    if(cameraSession===session&&!session.canceled){const status=area.querySelector('[role="status"]');if(status)status.textContent=message;}
   },onCode:async code=>{
    if(session.canceled||cameraSession!==session)return;
+   const materialRevision=currentDraft.materialRevision;
    const input=$('#'+inputId);
    if(!input)return;
    input.value=code;draft.barcode=code;
    await stopCamera();
-   if(draft!==currentDraft||currentDraft.kind==='item'&&currentDraft.step!==1)return;
+   if(draft!==currentDraft||currentDraft.kind==='item'&&(currentDraft.step!==1||currentDraft.materialRevision!==materialRevision))return;
    area.innerHTML='';
    if(currentDraft.kind==='move')$('#modal-form')?.requestSubmit();else if(reuseSavedBarcode(code))$('#item-qty')?.focus();else{const name=$('#item-name');if(!name.value)name.focus();else $('#item-qty')?.focus();}
   }});
@@ -212,6 +235,14 @@ async function restoreAndroidBackup(){
  }catch(error){backupError(error,currentDraft);}
 }
 document.addEventListener('change',async event=>{
+ if(event.target.id==='item-existing'){
+  if(draft?.kind!=='item'||draft.step!==1||draft.busy)return;
+  captureMaterialFields();draft.error='';
+  const item=data.items.find(item=>item.id===event.target.value);
+  if(item){reuseSavedMaterial(item);draft.barcode=item.barcode||'';}
+  else{draft.selectedItemId='';draft.itemId=null;draft.name='';draft.unit='boxes';draft.barcode='';}
+  renderModal();return;
+ }
  if(event.target.id==='item-barcode'){if(!draft?.busy)reuseSavedBarcode(event.target.value);return;}
  if(event.target.id==='scan-camera'){if(!draft?.busy)startCamera(event.target.value,true);return;}
  if(event.target.id!=='restore-backup'||!event.target.files[0]||draft?.busy)return;

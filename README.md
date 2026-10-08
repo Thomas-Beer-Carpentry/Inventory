@@ -24,7 +24,7 @@ Opening `index.html` from Android Files or opening the ZIP directly is not a rel
 Once installed:
 
 1. Enter the name recorded on transactions.
-2. Choose **Add item**. Enter the material name, unit and opening quantity together; scan or enter a barcode if wanted. Continue to the confirmation, then choose **Confirm stock in**.
+2. Choose **Add item**. Select a saved material from the dropdown, or enter a new material name and unit. Enter the quantity in the same popup; scan or enter a barcode if wanted. Continue to the confirmation, then choose **Confirm stock in**.
 3. Create a job with its client and description. **Stock Out** requires an Active destination job.
 4. Open that job to return unused stock and see its complete history and taken/returned/net material summary.
 
@@ -35,6 +35,8 @@ Stock rows show a large quantity first, then the material name and last movement
 Barcodes are optional. Materials without one remain available in the manual material selectors for Stock In, Stock Out and returns. Add Material has two steps: details and quantity, then confirmation. The material and its opening stock-in audit are saved together only when confirmed; cancellation leaves stock unchanged.
 
 Descriptions are needed only when registering a new material. Scanning or typing an already saved barcode in Add Material fills its saved name and unit in the first popup; enter the quantity and continue to confirmation. Barcodes remain text, including leading zeroes, and saved materials are reused rather than duplicated.
+
+The material dropdown includes saved materials with zero stock. Entering an existing name and unit adds to that material automatically, ignoring capitals and extra spaces. Different units remain separate. A new barcode for a matching material is remembered alongside its existing barcode, and either code can be scanned in, out, or returned. If an older inventory has multiple matching records, choose the intended material from the dropdown; its existing history remains attached to that record.
 
 Open a job and choose **Delete job** to remove it and its material list from Active and Completed jobs. It moves to **Deleted**, retaining the permanent transactions visible in Activity. Deletion does not change Workshop quantities or automatically return materials. Deleted jobs cannot receive new stock-outs; their history still allows bounded returns of unused materials. **Restore job** puts the job in Completed, where it can be reopened explicitly.
 

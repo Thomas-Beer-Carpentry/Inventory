@@ -9,6 +9,8 @@ const barcodeValue=value=>{
  if(value.length>100)throw new Error('Enter a valid barcode.');
  return value;
 };
+const canonical=value=>value.normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();
+const itemCodes=item=>[...(item.barcode==null?[]:[item.barcode]),...(item.barcode_aliases||[])];
 const identifier=(value,label)=>{if(typeof value!=='string'||!/^[a-zA-Z0-9-]{10,80}$/.test(value))throw new Error('The backup contains an invalid '+label+'.');return value;};
 const positive=value=>{if(!Number.isSafeInteger(value)||value<1||value>1000000)throw new Error('Enter a whole quantity greater than zero.');return value;};
 const stamp=value=>{if(typeof value!=='string'||!Number.isFinite(Date.parse(value)))throw new Error('The backup contains an invalid date.');return value;};
@@ -17,8 +19,13 @@ function validateBackup(backup){
  const itemMap=new Map(),jobMap=new Map(),barcodes=new Set(),movementIds=new Set(),sequences=new Set(),quantities=new Map(),held=new Map();
  const items=backup.items.map(raw=>{
   const item={id:identifier(raw.id,'item ID'),name:text(raw.name,'material name'),barcode:barcodeValue(raw.barcode),unit:text(raw.unit,'unit',30),quantity:raw.quantity,created_at:stamp(raw.created_at)};
-  if(itemMap.has(item.id)||(item.barcode!==null&&barcodes.has(item.barcode))||!Number.isSafeInteger(item.quantity)||item.quantity<0)throw new Error('The backup has invalid or duplicate materials.');
-  itemMap.set(item.id,item);if(item.barcode!==null)barcodes.add(item.barcode);quantities.set(item.id,0);return item;
+  if(raw.barcode_aliases!==undefined){
+   if(!Array.isArray(raw.barcode_aliases))throw new Error('The backup contains invalid barcode aliases.');
+   item.barcode_aliases=Array.from(raw.barcode_aliases,value=>{const code=barcodeValue(value);if(code===null)throw new Error('The backup contains invalid barcode aliases.');return code;});
+  }
+  if(itemMap.has(item.id)||!Number.isSafeInteger(item.quantity)||item.quantity<0)throw new Error('The backup has invalid or duplicate materials.');
+  for(const code of itemCodes(item)){if(barcodes.has(code))throw new Error('The backup has invalid or duplicate barcodes.');barcodes.add(code);}
+  itemMap.set(item.id,item);quantities.set(item.id,0);return item;
  });
  const jobs=backup.jobs.map(raw=>{
   const job={id:identifier(raw.id,'job ID'),client:text(raw.client,'client name'),name:text(raw.name,'job description'),address:raw.address?text(raw.address,'address',300):null,status:raw.status,created_at:stamp(raw.created_at)};
@@ -76,7 +83,7 @@ export function createPhoneStore({indexedDB=globalThis.indexedDB,IDBKeyRange=glo
    if(path==='operator'){const old=await requestValue(stores.meta.get('operator'));const user={id:old?.value.id||createId(),name:text(body.name,'your name')};await requestValue(stores.meta.put({key:'operator',value:user}));return user;}
    if(path==='items'){
     const name=text(body.name,'material name'),barcode=barcodeValue(body.barcode),unit=text(body.unit,'unit',30);
-    if(barcode!==null&&await requestValue(stores.items.index('barcode').get(barcode)))throw new Error('That barcode already belongs to an item.');
+    if(barcode!==null&&(await requestValue(stores.items.getAll())).some(item=>itemCodes(item).includes(barcode)))throw new Error('That barcode already belongs to an item.');
     const item={id:createId(),name,barcode,unit,quantity:0,created_at:now()};await requestValue(stores.items.add(item));return {id:item.id};
    }
    if(path==='items/stock-in'){
@@ -84,18 +91,35 @@ export function createPhoneStore({indexedDB=globalThis.indexedDB,IDBKeyRange=glo
     if(typeof id!=='string'||!/^[a-zA-Z0-9-]{10,80}$/.test(id))throw new Error('Please start a new transaction.');
     positive(quantity);
     if(body.type!==undefined&&body.type!=='STOCK_IN')throw new Error('Use Stock In to add a material.');
+    if(body.jobId!=null)throw new Error('Stock In must add materials to the Workshop without a job.');
     const barcode=barcodeValue(body.barcode);
+    const itemId=body.itemId==null||body.itemId===''?null:body.itemId;
+    if(itemId!==null&&(typeof itemId!=='string'||!/^[a-zA-Z0-9-]{10,80}$/.test(itemId)))throw new Error('Select a valid material.');
     const operator=await requestValue(stores.meta.get('operator'));if(!operator)throw new Error('Set your scanning name in Phone data before saving a movement.');
     const existing=await requestValue(stores.movements.get(id));
     if(existing){
      const savedItem=await requestValue(stores.items.get(existing.item_id));
-     const differentDetails=barcode===null&&(existing.item_name!==text(body.name,'material name')||existing.unit!==text(body.unit,'unit',30));
-     if(!savedItem||existing.type!=='STOCK_IN'||existing.job_id!==null||existing.quantity!==quantity||existing.user_id!==operator.value.id||barcodeValue(savedItem.barcode)!==barcode||differentDetails)throw new Error('This transaction reference is already in use.');
+     const differentDetails=itemId===null&&barcode===null&&(canonical(existing.item_name)!==canonical(text(body.name,'material name'))||canonical(existing.unit)!==canonical(text(body.unit,'unit',30)));
+     if(!savedItem||existing.type!=='STOCK_IN'||existing.job_id!==null||existing.quantity!==quantity||existing.user_id!==operator.value.id||(itemId!==null&&itemId!==existing.item_id)||(barcode!==null&&!itemCodes(savedItem).includes(barcode))||differentDetails)throw new Error('This transaction reference is already in use.');
      return {id:existing.item_id,movement:existing};
     }
-    const savedItem=barcode===null?null:await requestValue(stores.items.index('barcode').get(barcode));
+    const items=await requestValue(stores.items.getAll());
+    const codeOwner=barcode===null?null:items.find(item=>itemCodes(item).includes(barcode));
+    let savedItem=itemId===null?codeOwner:items.find(item=>item.id===itemId);
+    if(itemId!==null&&!savedItem)throw new Error('This item could not be found.');
+    if(itemId!==null&&codeOwner&&codeOwner.id!==itemId)throw new Error('That barcode already belongs to another item.');
+    let name,unit;
+    if(!savedItem){
+     name=text(body.name,'material name');unit=text(body.unit,'unit',30);
+     const matches=items.filter(item=>canonical(item.name)===canonical(name)&&canonical(item.unit)===canonical(unit));
+     if(matches.length>1)throw new Error('More than one saved material matches. Choose a material from the dropdown.');
+     savedItem=matches[0]||null;
+    }
     const createdAt=now();
-    const item=savedItem||{id:createId(),name:text(body.name,'material name'),barcode,unit:text(body.unit,'unit',30),quantity:0,created_at:createdAt};
+    let item=savedItem||{id:createId(),name,barcode,unit,quantity:0,created_at:createdAt};
+    if(barcode!==null&&!itemCodes(item).includes(barcode)){
+     item=item.barcode==null?{...item,barcode}:{...item,barcode_aliases:[...(item.barcode_aliases||[]),barcode]};
+    }
     const after=item.quantity+quantity;if(!Number.isSafeInteger(after)||after<0)throw new Error('The resulting stock quantity is invalid.');
     const sequence=(await requestValue(stores.meta.get('sequence')))?.value||0;
     const movement={id,item_id:item.id,job_id:null,type:'STOCK_IN',quantity,created_at:createdAt,sequence:sequence+1,user_id:operator.value.id,user_name:operator.value.name,item_name:item.name,unit:item.unit,client_name:null,job_name:null,before:item.quantity,after};

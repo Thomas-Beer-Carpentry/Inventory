@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
 const barcode='0123456789012';
+const aliasBarcode='0000000012345';
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
 async function flush(){for(let i=0;i<40;i++)await Promise.resolve();}
 const decode=value=>value.replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
@@ -15,6 +16,7 @@ class Element {
  constructor(document,tag='div',attributes={}){
   this.document=document;this.tagName=tag;this.children=[];this.style={};this.dataset={};
   this.id=attributes.id||'';this.name=attributes.name||'';this.value=attributes.value||'';
+  this.readOnly='readonly' in attributes;this.disabled='disabled' in attributes;
   this.className=attributes.class||'';this.role=attributes.role||'';this.textContent='';this.isConnected=true;
   this.classList={add(){},remove(){}};
   document.elements.add(this);if(this.id)document.nodes.set(this.id,this);
@@ -25,7 +27,7 @@ class Element {
   // rendering is parsed so selectors and removal operate on emitted elements.
   if(this.id==='app')return;
   for(const match of value.matchAll(/<([a-z][a-z0-9-]*)\b([^>]*)>/gi)){
-   const attributes={};for(const attribute of match[2].matchAll(/([\w-]+)="([^"]*)"/g))attributes[attribute[1]]=decode(attribute[2]);
+   const attributes={};for(const attribute of match[2].matchAll(/([\w-]+)(?:="([^"]*)")?/g))attributes[attribute[1]]=decode(attribute[2]??'');
    const child=new Element(this.document,match[1],attributes);child.parent=this;this.children.push(child);
   }
   // A native select derives its value from the selected option, rather than a
@@ -63,12 +65,13 @@ class Document {
  querySelectorAll(){return [];}
  click(action){const target={dataset:{action},closest(){return this;}};this.dispatch('click',{target});}
  input(id,value){const target=this.nodes.get(id);assert.ok(target,'The actual app must render '+id);target.value=String(value);this.dispatch('input',{target});}
+ changeMaterial(id){const target=this.nodes.get('item-existing');assert.ok(target,'The actual app must render its saved-material dropdown');target.value=id;this.dispatch('change',{target});}
  changeCamera(id){const target=this.nodes.get('scan-camera');assert.ok(target,'The actual app must render its camera selector');target.value=id;this.dispatch('change',{target});}
 }
 
 async function app({preference=''}={}){
  const document=new Document(),plans=[],scanners=[],writes=[],active=new Set(),apiCalls=[];
- const state={items:[{id:'nails-item',name:'Nails',barcode,unit:'boxes',quantity:5}],jobs:[],movements:[],user:{name:'Eryk',configured:true}};
+ const state={items:[{id:'nails-item',name:'Nails',barcode,barcode_aliases:[aliasBarcode],unit:'boxes',quantity:5},{id:'timber-item',name:'Timber',barcode:null,unit:'lengths',quantity:2}],jobs:[],movements:[],user:{name:'Eryk',configured:true}};
  const window={addEventListener(){}};
  const collaborators={
   document,window,console,crypto,URL,Intl,Date,
@@ -91,7 +94,7 @@ async function app({preference=''}={}){
    scanners.push(scanner);return scanner;
   },
   FormData:class{
-   constructor(){this.entries=[...document.nodes.values()].filter(element=>element.name).map(element=>[element.name,element.value]);}
+   constructor(){this.entries=[...document.nodes.values()].filter(element=>element.name&&!element.disabled).map(element=>[element.name,element.value]);}
    get(name){return this.entries.find(entry=>entry[0]===name)?.[1]??null;}
    [Symbol.iterator](){return this.entries[Symbol.iterator]();}
   },
@@ -120,6 +123,59 @@ test('A known barcode scan fills the same Add Material popup and retains its typ
  assert.equal(h.document.querySelector('#move-qty'),null,'A known scan must not open a separate Stock In movement popup');
  assert.equal(h.scanners[0].stops,1);assert.equal(h.active.size,0);
  assert.deepEqual(h.apiCalls,['state'],'A scan only prepares the item form, without saving stock');
+});
+
+test('A saved alias scan selects and locks its material while retaining quantity for the single review',async()=>{
+ const h=await app();enterMaterial(h,{name:'Temporary',unit:'tubs',quantity:9});
+ await h.controller.startCamera();await h.scanners[0].options.onCode(aliasBarcode);await flush();
+ assert.equal(h.document.querySelector('#item-existing').value,'nails-item');
+ assert.equal(h.document.querySelector('#item-name').value,'Nails');assert.equal(h.document.querySelector('#item-name').readOnly,true);
+ assert.equal(h.document.querySelector('#item-unit').value,'boxes');assert.equal(h.document.querySelector('#item-unit').disabled,true);
+ assert.equal(h.document.querySelector('#item-qty').value,'9');assert.equal(h.controller.currentDraft().step,1);
+ assert.ok([barcode,aliasBarcode].includes(h.document.querySelector('#item-barcode').value),'The selected material must retain a saved barcode identity');
+ h.submit();await flush();
+ assert.equal(h.controller.currentDraft().step,2);assert.equal(h.controller.currentDraft().selectedItemId,'nails-item');
+ assert.equal(h.controller.currentDraft().unit,'boxes','Disabled unit is recovered from the selected saved material');
+ assert.equal(h.controller.currentDraft().quantity,9);assert.deepEqual(h.apiCalls,['state']);assert.equal(h.active.size,0);
+});
+
+test('Changing the saved-material dropdown stops scanning and suppresses old callbacks and camera choices',async()=>{
+ const h=await app(),choices=deferred();enterMaterial(h,{quantity:8});h.plan({choices});
+ await h.controller.startCamera();h.document.changeMaterial('timber-item');await flush();
+ assert.equal(h.document.querySelector('#item-existing').value,'timber-item');
+ assert.equal(h.document.querySelector('#item-name').value,'Timber');assert.equal(h.document.querySelector('#item-unit').value,'lengths');
+ assert.equal(h.document.querySelector('#item-qty').value,'8');assert.equal(h.document.querySelector('#item-barcode').value,'');
+ const modal=h.document.querySelector('#modal-root').innerHTML,draft=JSON.stringify(h.controller.currentDraft());
+ await h.scanners[0].options.onCode(aliasBarcode);choices.resolve({cameras:[{id:'late',label:'Late camera'}],selectedId:'late'});await flush();
+ assert.equal(h.document.querySelector('#modal-root').innerHTML,modal);assert.equal(JSON.stringify(h.controller.currentDraft()),draft);
+ assert.equal(h.document.querySelector('#scan-camera'),null);assert.equal(h.scanners[0].stops,1);
+ assert.equal(h.active.size,0);assert.deepEqual(h.apiCalls,['state']);
+});
+
+test('A scan waiting for stream cleanup cannot overwrite a later saved-material choice at the same form step',async()=>{
+ const h=await app(),stop=deferred();enterMaterial(h,{quantity:6});h.plan({stop});
+ await h.controller.startCamera();const scan=h.scanners[0].options.onCode(aliasBarcode);await flush();
+ h.document.changeMaterial('timber-item');await flush();
+ assert.equal(h.document.querySelector('#item-existing').value,'timber-item');
+ const modal=h.document.querySelector('#modal-root').innerHTML,draft=JSON.stringify(h.controller.currentDraft());
+ stop.resolve();await scan;await h.controller.stopCamera();await flush();
+ assert.equal(h.document.querySelector('#modal-root').innerHTML,modal);assert.equal(JSON.stringify(h.controller.currentDraft()),draft);
+ assert.equal(h.document.querySelector('#item-name').value,'Timber');assert.equal(h.document.querySelector('#item-unit').value,'lengths');
+ assert.equal(h.document.querySelector('#item-qty').value,'6');assert.equal(h.document.querySelector('#item-existing').value,'timber-item');
+ assert.equal(h.active.size,0);assert.deepEqual(h.apiCalls,['state']);
+});
+
+test('Choosing New material clears saved details but retains quantity despite a scan awaiting cleanup',async()=>{
+ const h=await app(),stop=deferred();h.document.changeMaterial('timber-item');h.document.input('item-qty',11);h.plan({stop});
+ await h.controller.startCamera();const scan=h.scanners[0].options.onCode(aliasBarcode);await flush();
+ h.document.changeMaterial('');await flush();
+ assert.equal(h.document.querySelector('#item-existing').value,'');assert.equal(h.document.querySelector('#item-name').value,'');
+ assert.equal(h.document.querySelector('#item-barcode').value,'');assert.equal(h.document.querySelector('#item-qty').value,'11');
+ assert.equal(h.document.querySelector('#item-name').readOnly,false);assert.equal(h.document.querySelector('#item-unit').disabled,false);
+ const modal=h.document.querySelector('#modal-root').innerHTML,draft=JSON.stringify(h.controller.currentDraft());
+ stop.resolve();await scan;await h.controller.stopCamera();await flush();
+ assert.equal(h.document.querySelector('#modal-root').innerHTML,modal);assert.equal(JSON.stringify(h.controller.currentDraft()),draft);
+ assert.equal(h.document.querySelector('#item-existing').value,'');assert.equal(h.active.size,0);assert.deepEqual(h.apiCalls,['state']);
 });
 
 test('Add Material confirmation starts no camera and ignores a stale camera-selector event',async()=>{
@@ -161,7 +217,7 @@ test('A scan awaiting old-stream cleanup cannot replace a newer Add Material con
 });
 
 test('Rapid camera changes release the old stream before starting only the latest selection',async()=>{
- const h=await app(),oldStop=deferred();h.plan({stop:oldStop});
+ const h=await app(),oldStop=deferred(),originalBarcode=h.controller.currentDraft().barcode;h.plan({stop:oldStop});
  await h.controller.startCamera('wide',true);await flush();
  h.document.changeCamera('front');await flush();h.document.changeCamera('main');await flush();
  assert.deepEqual(h.scanners.map(scanner=>scanner.id),['wide']);assert.equal(h.active.size,1);
@@ -170,7 +226,7 @@ test('Rapid camera changes release the old stream before starting only the lates
  assert.deepEqual(h.writes,['wide','main']);assert.equal(h.active.size,1);assert.equal(h.scanners[0].stops,1);
  await h.scanners[0].options.onCode('late-old-camera');
  assert.equal(h.document.querySelector('#item-barcode').value,'');
- assert.equal(h.controller.currentDraft().barcode,undefined);
+ assert.equal(h.controller.currentDraft().barcode,originalBarcode);
  await h.controller.stopCamera();assert.equal(h.active.size,0);
 });
 

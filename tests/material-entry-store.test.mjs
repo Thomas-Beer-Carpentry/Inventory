@@ -215,3 +215,147 @@ test('Backup barcode validation allows missing or blank codes but rejects duplic
   }
  }finally{await source.close();}
 });
+
+test('Dropdown selection adds stock to the chosen saved material with or without a barcode',async()=>{
+ const f=fixture();
+ try{
+  await f.store.request('operator',{name:'Eryk'});
+  for(const barcode of [null,'00123']){
+   const selected=(await f.store.request('items',{name:'Saved concrete '+String(barcode),barcode,unit:'bags'})).id;
+   const body=entry({itemId:selected,name:'',unit:null}),result=await f.store.request('items/stock-in',body);
+   assert.equal(result.id,selected);assert.equal(result.movement.unit,'bags');assert.equal(result.movement.item_name,'Saved concrete '+String(barcode));
+   assert.deepEqual(await f.store.request('items/stock-in',body),result);
+  }
+  const state=await f.store.request('state');assert.equal(state.items.length,2);assert.ok(state.items.every(item=>item.quantity===3));
+ }finally{await f.close();}
+});
+
+test('Manual stock-in reuses canonical name and unit matches, preserving saved display metadata and audit history',async()=>{
+ const f=fixture();
+ try{
+  await f.store.request('operator',{name:'Eryk'});
+  const saved=(await f.store.request('items',{name:'90mm  Galvanised Nails',unit:'Boxes'})).id;
+  const first=await f.store.request('items/stock-in',entry({name:' ９０ｍｍ\tGALVANISED  NAILS ',unit:' ｂｏｘｅｓ ',quantity:2}));
+  const second=await f.store.request('items/stock-in',entry({name:'90MM GALVANISED nails',unit:'boxes',quantity:3}));
+  const state=await f.store.request('state');assert.equal(first.id,saved);assert.equal(second.id,saved);assert.equal(state.items.length,1);assert.equal(state.items[0].quantity,5);
+  assert.equal(state.items[0].name,'90mm  Galvanised Nails');assert.equal(state.items[0].unit,'Boxes');
+  assert.deepEqual(state.movements.map(m=>[m.before,m.after,m.sequence]),[[0,2,1],[2,5,2]]);
+  assert.ok(state.movements.every(m=>m.item_name==='90mm  Galvanised Nails'&&m.unit==='Boxes'));
+ }finally{await f.close();}
+});
+
+test('The same material name in different units stays separate',async()=>{
+ const f=fixture();
+ try{
+  await f.store.request('operator',{name:'Eryk'});
+  const boxes=await f.store.request('items/stock-in',entry({name:'Nails',unit:'boxes'}));
+  const bags=await f.store.request('items/stock-in',entry({name:'NAILS',unit:'bags'}));
+  const moreBags=await f.store.request('items/stock-in',entry({name:' nails ',unit:' BAGS '}));
+  assert.notEqual(boxes.id,bags.id);assert.equal(moreBags.id,bags.id);
+  const state=await f.store.request('state');assert.equal(state.items.length,2);assert.equal(state.items.find(item=>item.id===boxes.id).quantity,3);assert.equal(state.items.find(item=>item.id===bags.id).quantity,6);
+ }finally{await f.close();}
+});
+
+test('A merged material remembers its first barcode and additional exact aliases, which can be scanned after backup restore',async()=>{
+ const f=fixture(),destination=fixture();
+ try{
+  await f.store.request('operator',{name:'Eryk'});
+  const saved=(await f.store.request('items',{name:'Timber',unit:'lengths'})).id;
+  const first=await f.store.request('items/stock-in',entry({name:'TIMBER',unit:'LENGTHS',barcode:'00123'}));
+  const second=await f.store.request('items/stock-in',entry({name:'timber',unit:'lengths',barcode:' 00123 '}));
+  assert.equal(first.id,saved);assert.equal(second.id,saved);
+  const state=await f.store.request('state');assert.equal(state.items.length,1);assert.equal(state.items[0].barcode,'00123');assert.deepEqual(state.items[0].barcode_aliases,[' 00123 ']);
+  assert.deepEqual(state.movements[0],first.movement);
+  await assert.rejects(f.store.request('items',{name:'Alias collision',barcode:' 00123 ',unit:'boxes'}),/barcode.*belongs|duplicate/i);
+  await destination.store.request('restore',await f.store.request('export'));assert.deepEqual(await destination.store.request('state'),state);
+  const scan=await destination.store.request('items/stock-in',entry({barcode:' 00123 ',name:'',unit:null}));
+  assert.equal(scan.id,saved);assert.deepEqual([scan.movement.before,scan.movement.after,scan.movement.item_name,scan.movement.unit],[6,9,'Timber','lengths']);
+ }finally{await f.close();await destination.close();}
+});
+
+test('Legacy duplicate names require dropdown selection rather than guessing a target or modifying historical records',async()=>{
+ const f=fixture();
+ try{
+  await f.store.request('operator',{name:'Eryk'});
+  const first=(await f.store.request('items',{name:'Nails',unit:'boxes'})).id;
+  const second=(await f.store.request('items',{name:' NAILS ',unit:'BOXES'})).id;
+  const before=await f.store.request('state');
+  await assert.rejects(f.store.request('items/stock-in',entry({name:'nails',unit:'boxes',barcode:'new-code'})),/choose.*dropdown|more than one|multiple.*material/i);
+  assert.deepEqual(await f.store.request('state'),before);
+  const selected=await f.store.request('items/stock-in',entry({itemId:second,barcode:'new-code',name:'',unit:null}));
+  assert.equal(selected.id,second);const after=await f.store.request('state');assert.equal(after.items.length,2);
+  assert.equal(after.items.find(item=>item.id===first).quantity,0);assert.equal(after.items.find(item=>item.id===second).quantity,3);
+ }finally{await f.close();}
+});
+
+test('Concurrent separate manual entries merge once and cannot assign one new code to different saved items',async()=>{
+ const f=fixture();
+ try{
+  await f.store.request('operator',{name:'Eryk'});const second=f.connect();await second.request('state');
+  const results=await Promise.all([
+   f.store.request('items/stock-in',entry({name:'Nails',unit:'boxes',quantity:2,barcode:'00123'})),
+   second.request('items/stock-in',entry({name:' NAILS ',unit:' BOXES ',quantity:3,barcode:'00999'})),
+  ]);
+  assert.equal(results[0].id,results[1].id);const merged=await f.store.request('state');assert.equal(merged.items.length,1);assert.equal(merged.items[0].quantity,5);
+  assert.deepEqual(merged.movements.map(m=>[m.before,m.after,m.sequence]),[[0,2,1],[2,5,2]]);
+  const other=(await f.store.request('items',{name:'Concrete',unit:'bags'})).id;
+  const conflicts=await Promise.allSettled([
+   f.store.request('items/stock-in',entry({itemId:results[0].id,barcode:'shared-new-code'})),
+   second.request('items/stock-in',entry({itemId:other,barcode:'shared-new-code'})),
+  ]);
+  assert.equal(conflicts.filter(result=>result.status==='fulfilled').length,1);assert.equal(conflicts.filter(result=>result.status==='rejected').length,1);
+  assert.match(conflicts.find(result=>result.status==='rejected').reason.message,/barcode|belongs|conflict/i);
+ }finally{await f.close();}
+});
+
+test('Retries preserve the original target after codes or duplicates are added and reject conflicting selections',async()=>{
+ const f=fixture();
+ try{
+  await f.store.request('operator',{name:'Eryk'});const body=entry({name:'Nails',unit:'boxes'}),first=await f.store.request('items/stock-in',body);
+  await f.store.request('items/stock-in',entry({itemId:first.id,barcode:'00123'}));
+  const other=(await f.store.request('items',{name:'NAILS',unit:'BOXES'})).id;
+  const before=await f.store.request('state');
+  assert.deepEqual(await f.store.request('items/stock-in',{...body,name:' ｎａｉｌｓ ',unit:' BOXES '}),first);
+  await assert.rejects(f.store.request('items/stock-in',{...body,itemId:other}),/reference.*use|transaction/i);
+  await assert.rejects(f.store.request('items/stock-in',{...body,barcode:'unknown-code'}),/reference.*use|transaction/i);
+  await assert.rejects(f.store.request('items/stock-in',{...body,jobId:crypto.randomUUID()}),/job|stock/i);
+  await assert.rejects(f.store.request('items/stock-in',entry({itemId:other,barcode:'00123'})),/barcode|belongs|conflict/i);
+  await assert.rejects(f.store.request('items/stock-in',entry({itemId:crypto.randomUUID()})),/material|item|not.*found/i);
+  assert.deepEqual(await f.store.request('state'),before);
+ }finally{await f.close();}
+});
+
+test('Alias and primary barcode additions roll back with a failed ledger write and are safe on retry',async()=>{
+ for(const primary of [null,'00123']){
+  const f=fixture();
+  try{
+   await f.store.request('operator',{name:'Eryk'});const item=(await f.store.request('items',{name:'Nails',unit:'boxes',barcode:primary})).id;
+   await f.store.request('movements',stockIn(item,4));const before=await f.store.request('state'),body=entry({itemId:item,barcode:'00999'});
+   const add=IDBObjectStore.prototype.add;IDBObjectStore.prototype.add=function(...args){if(this.name==='movements')throw new DOMException('Storage full','QuotaExceededError');return add.apply(this,args);};
+   try{await assert.rejects(f.store.request('items/stock-in',body),/No inventory changes were saved/);}finally{IDBObjectStore.prototype.add=add;}
+   assert.deepEqual(await f.store.request('state'),before);
+   const result=await f.store.request('items/stock-in',body);assert.equal(result.id,item);assert.deepEqual([result.movement.before,result.movement.after,result.movement.sequence],[4,7,2]);
+   const after=await f.store.request('state'),saved=after.items.find(value=>value.id===item);
+   if(primary===null){assert.equal(saved.barcode,'00999');}else{assert.equal(saved.barcode,primary);assert.deepEqual(saved.barcode_aliases,['00999']);}
+   assert.deepEqual(await f.store.request('items/stock-in',body),result);assert.deepEqual(await f.store.request('state'),after);
+  }finally{await f.close();}
+ }
+});
+
+test('Backup validation preserves optional alias arrays and rejects malformed or globally duplicated codes atomically',async()=>{
+ const f=fixture();
+ try{
+  await f.store.request('operator',{name:'Eryk'});
+  const item=(await f.store.request('items/stock-in',entry({name:'Nails',barcode:'00123'}))).id;
+  await f.store.request('items/stock-in',entry({itemId:item,barcode:'00999'}));
+  const other=(await f.store.request('items',{name:'Concrete',unit:'bags',barcode:'other-code'})).id;
+  const backup=await f.store.request('export');
+  const cases=[null,{},Array(1),[''],['   '],[null],[123],['00123'],['00999','00999'],['other-code']];
+  for(const aliases of cases){
+   const malformed=structuredClone(backup);malformed.items.find(value=>value.id===item).barcode_aliases=aliases;const destination=fixture();
+   try{await assert.rejects(destination.store.request('restore',malformed),/barcode|alias|duplicate|invalid/i);assert.equal((await destination.store.request('state')).items.length,0);}finally{await destination.close();}
+  }
+  const duplicateAlias=structuredClone(backup);duplicateAlias.items.find(value=>value.id===other).barcode_aliases=['00999'];const destination=fixture();
+  try{await assert.rejects(destination.store.request('restore',duplicateAlias),/barcode|duplicate|invalid/i);assert.equal((await destination.store.request('state')).items.length,0);}finally{await destination.close();}
+ }finally{await f.close();}
+});
