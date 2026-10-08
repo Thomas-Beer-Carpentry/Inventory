@@ -2,6 +2,13 @@ const FORMAT='workshop-phone-v1';
 const TYPES=['STOCK_IN','TAKEN_TO_JOB','RETURNED_TO_WORKSHOP'];
 const requestValue=request=>new Promise((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
 const text=(value,label,max=160)=>{if(typeof value!=='string'||!value.trim()||value.trim().length>max)throw new Error('Enter a valid '+label+'.');return value.trim();};
+const barcodeValue=value=>{
+ if(value==null)return null;
+ if(typeof value!=='string')throw new Error('Enter a valid barcode.');
+ if(!value.trim())return null;
+ if(value.length>100)throw new Error('Enter a valid barcode.');
+ return value;
+};
 const identifier=(value,label)=>{if(typeof value!=='string'||!/^[a-zA-Z0-9-]{10,80}$/.test(value))throw new Error('The backup contains an invalid '+label+'.');return value;};
 const positive=value=>{if(!Number.isSafeInteger(value)||value<1||value>1000000)throw new Error('Enter a whole quantity greater than zero.');return value;};
 const stamp=value=>{if(typeof value!=='string'||!Number.isFinite(Date.parse(value)))throw new Error('The backup contains an invalid date.');return value;};
@@ -9,9 +16,9 @@ function validateBackup(backup){
  if(backup?.format!==FORMAT||!Array.isArray(backup.items)||!Array.isArray(backup.jobs)||!Array.isArray(backup.movements))throw new Error('Choose a Workshop phone backup.');
  const itemMap=new Map(),jobMap=new Map(),barcodes=new Set(),movementIds=new Set(),sequences=new Set(),quantities=new Map(),held=new Map();
  const items=backup.items.map(raw=>{
-  const item={id:identifier(raw.id,'item ID'),name:text(raw.name,'material name'),barcode:text(raw.barcode,'barcode',100),unit:text(raw.unit,'unit',30),quantity:raw.quantity,created_at:stamp(raw.created_at)};
-  if(itemMap.has(item.id)||barcodes.has(item.barcode)||!Number.isSafeInteger(item.quantity)||item.quantity<0)throw new Error('The backup has invalid or duplicate materials.');
-  itemMap.set(item.id,item);barcodes.add(item.barcode);quantities.set(item.id,0);return item;
+  const item={id:identifier(raw.id,'item ID'),name:text(raw.name,'material name'),barcode:barcodeValue(raw.barcode),unit:text(raw.unit,'unit',30),quantity:raw.quantity,created_at:stamp(raw.created_at)};
+  if(itemMap.has(item.id)||(item.barcode!==null&&barcodes.has(item.barcode))||!Number.isSafeInteger(item.quantity)||item.quantity<0)throw new Error('The backup has invalid or duplicate materials.');
+  itemMap.set(item.id,item);if(item.barcode!==null)barcodes.add(item.barcode);quantities.set(item.id,0);return item;
  });
  const jobs=backup.jobs.map(raw=>{
   const job={id:identifier(raw.id,'job ID'),client:text(raw.client,'client name'),name:text(raw.name,'job description'),address:raw.address?text(raw.address,'address',300):null,status:raw.status,created_at:stamp(raw.created_at)};
@@ -68,9 +75,33 @@ export function createPhoneStore({indexedDB=globalThis.indexedDB,IDBKeyRange=glo
   return transaction('readwrite',async stores=>{
    if(path==='operator'){const old=await requestValue(stores.meta.get('operator'));const user={id:old?.value.id||createId(),name:text(body.name,'your name')};await requestValue(stores.meta.put({key:'operator',value:user}));return user;}
    if(path==='items'){
-    const name=text(body.name,'material name'),barcode=text(body.barcode,'barcode',100),unit=text(body.unit,'unit',30);
-    if(await requestValue(stores.items.index('barcode').get(barcode)))throw new Error('That barcode already belongs to an item.');
+    const name=text(body.name,'material name'),barcode=barcodeValue(body.barcode),unit=text(body.unit,'unit',30);
+    if(barcode!==null&&await requestValue(stores.items.index('barcode').get(barcode)))throw new Error('That barcode already belongs to an item.');
     const item={id:createId(),name,barcode,unit,quantity:0,created_at:now()};await requestValue(stores.items.add(item));return {id:item.id};
+   }
+   if(path==='items/stock-in'){
+    const {id,quantity}=body||{};
+    if(typeof id!=='string'||!/^[a-zA-Z0-9-]{10,80}$/.test(id))throw new Error('Please start a new transaction.');
+    positive(quantity);
+    if(body.type!==undefined&&body.type!=='STOCK_IN')throw new Error('Use Stock In to add a material.');
+    const barcode=barcodeValue(body.barcode);
+    const operator=await requestValue(stores.meta.get('operator'));if(!operator)throw new Error('Set your scanning name in Phone data before saving a movement.');
+    const existing=await requestValue(stores.movements.get(id));
+    if(existing){
+     const savedItem=await requestValue(stores.items.get(existing.item_id));
+     const differentDetails=barcode===null&&(existing.item_name!==text(body.name,'material name')||existing.unit!==text(body.unit,'unit',30));
+     if(!savedItem||existing.type!=='STOCK_IN'||existing.job_id!==null||existing.quantity!==quantity||existing.user_id!==operator.value.id||barcodeValue(savedItem.barcode)!==barcode||differentDetails)throw new Error('This transaction reference is already in use.');
+     return {id:existing.item_id,movement:existing};
+    }
+    const savedItem=barcode===null?null:await requestValue(stores.items.index('barcode').get(barcode));
+    const createdAt=now();
+    const item=savedItem||{id:createId(),name:text(body.name,'material name'),barcode,unit:text(body.unit,'unit',30),quantity:0,created_at:createdAt};
+    const after=item.quantity+quantity;if(!Number.isSafeInteger(after)||after<0)throw new Error('The resulting stock quantity is invalid.');
+    const sequence=(await requestValue(stores.meta.get('sequence')))?.value||0;
+    const movement={id,item_id:item.id,job_id:null,type:'STOCK_IN',quantity,created_at:createdAt,sequence:sequence+1,user_id:operator.value.id,user_name:operator.value.name,item_name:item.name,unit:item.unit,client_name:null,job_name:null,before:item.quantity,after};
+    if(savedItem)await requestValue(stores.items.put({...item,quantity:after}));else await requestValue(stores.items.add({...item,quantity:after}));
+    await requestValue(stores.movements.add(movement));await requestValue(stores.meta.put({key:'sequence',value:sequence+1}));
+    return {id:item.id,movement};
    }
    if(path==='jobs'){const job={id:createId(),client:text(body.client,'client name'),name:text(body.name,'job description'),address:body.address?text(body.address,'address',300):null,status:'Active',created_at:now()};await requestValue(stores.jobs.add(job));return {id:job.id};}
    const status=path.match(/^jobs\/([^/]+)\/status$/);

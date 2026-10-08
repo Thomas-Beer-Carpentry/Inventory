@@ -28,12 +28,24 @@ class Element {
    const attributes={};for(const attribute of match[2].matchAll(/([\w-]+)="([^"]*)"/g))attributes[attribute[1]]=decode(attribute[2]);
    const child=new Element(this.document,match[1],attributes);child.parent=this;this.children.push(child);
   }
+  // A native select derives its value from the selected option, rather than a
+  // value attribute on the select. Model this for saved-material scan fills.
+  const selects=[...value.matchAll(/<select\b[^>]*\bid="([^"]*)"[^>]*>([\s\S]*?)<\/select>/gi)];
+  if(selects.length)for(const child of [...this.children])if(child.tagName==='option')child.remove();
+  for(const match of selects){
+   const select=this.document.nodes.get(decode(match[1]));
+   if(select)select.innerHTML=match[2];
+   const options=[...match[2].matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/gi)];
+   const option=options.find(option=>/\bselected\b/.test(option[1]))||options[0];
+   if(select&&option)select.value=decode(option[1].match(/\bvalue="([^"]*)"/)?.[1]??option[2].replace(/<[^>]*>/g,''));
+  }
  }
  get innerHTML(){return this.html||'';}
  append(child){if(child.parent)child.parent.children=child.parent.children.filter(value=>value!==child);child.parent=this;child.isConnected=true;this.children.push(child);}
  remove(){for(const child of [...this.children])child.remove();this.children=[];this.isConnected=false;this.document.elements.delete(this);if(this.document.nodes.get(this.id)===this)this.document.nodes.delete(this.id);if(this.parent)this.parent.children=this.parent.children.filter(value=>value!==this);}
  matches(selector){if(selector.startsWith('#'))return this.id===selector.slice(1);if(selector.startsWith('.'))return this.className.split(' ').includes(selector.slice(1));if(selector==='[role="status"]')return this.role==='status';return this.tagName===selector;}
  querySelector(selector){return this.children.find(child=>child.matches(selector))||null;}
+ querySelectorAll(selector){return this.children.filter(child=>child.matches(selector));}
  setAttribute(name,value){if(name==='aria-hidden')this.hidden=value;}
  focus(){this.document.activeElement=this;}
  blur(){}
@@ -50,6 +62,7 @@ class Document {
  querySelector(selector){if(selector.startsWith('#'))return this.nodes.get(selector.slice(1))||null;return [...this.elements].find(element=>element.matches(selector))||null;}
  querySelectorAll(){return [];}
  click(action){const target={dataset:{action},closest(){return this;}};this.dispatch('click',{target});}
+ input(id,value){const target=this.nodes.get(id);assert.ok(target,'The actual app must render '+id);target.value=String(value);this.dispatch('input',{target});}
  changeCamera(id){const target=this.nodes.get('scan-camera');assert.ok(target,'The actual app must render its camera selector');target.value=id;this.dispatch('change',{target});}
 }
 
@@ -86,8 +99,66 @@ async function app({preference=''}={}){
  const source=readFileSync(new URL('../public/app.js',import.meta.url),'utf8').replace(/^import[^\n]*\n/gm,'');
  const controller=vm.runInNewContext(source+'\n;({startCamera,stopCamera,closeModal,openMove,currentDraft:()=>draft});',collaborators,{filename:'app.js'});
  await flush();document.click('newitem');
- return {document,controller,scanners,writes,active,apiCalls,plan:value=>plans.push(value),get preference(){return preference;}};
+ return {document,controller,scanners,writes,active,apiCalls,plan:value=>plans.push(value),submit(){const form=document.querySelector('#modal-form');assert.ok(form,'The actual app must render its form');form.requestSubmit();},get preference(){return preference;}};
 }
+
+function enterMaterial(h,{name='Concrete',unit='bags',quantity=3,code=''}={}){
+ h.document.input('item-name',name);h.document.input('item-unit',unit);
+ h.document.input('item-qty',quantity);h.document.input('item-barcode',code);
+}
+
+test('A known barcode scan fills the same Add Material popup and retains its typed quantity before confirmation',async()=>{
+ const h=await app(),original=h.controller.currentDraft();
+ enterMaterial(h,{name:'Temporary name',unit:'tubs',quantity:7});
+ await h.controller.startCamera();await h.scanners[0].options.onCode(barcode);await flush();
+ assert.equal(h.controller.currentDraft(),original,'Scanning must retain the current item draft');
+ assert.deepEqual([original.kind,original.step],['item',1]);
+ assert.equal(h.document.querySelector('#item-name').value,'Nails');
+ assert.equal(h.document.querySelector('#item-unit').value,'boxes');
+ assert.equal(h.document.querySelector('#item-qty').value,'7');
+ assert.equal(h.document.querySelector('#item-barcode').value,barcode);
+ assert.equal(h.document.querySelector('#move-qty'),null,'A known scan must not open a separate Stock In movement popup');
+ assert.equal(h.scanners[0].stops,1);assert.equal(h.active.size,0);
+ assert.deepEqual(h.apiCalls,['state'],'A scan only prepares the item form, without saving stock');
+});
+
+test('Add Material confirmation starts no camera and ignores a stale camera-selector event',async()=>{
+ const h=await app();enterMaterial(h);h.submit();await flush();
+ assert.deepEqual([h.controller.currentDraft().kind,h.controller.currentDraft().step],['item',2]);
+ const review=h.document.querySelector('#modal-root').innerHTML,draft=JSON.stringify(h.controller.currentDraft());
+ assert.equal(h.document.querySelector('#camera-area'),null);
+ await h.controller.startCamera('main',true);h.document.click('camera');
+ h.document.dispatch('change',{target:{id:'scan-camera',value:'late-camera'}});await flush();
+ assert.equal(h.scanners.length,0);assert.equal(h.active.size,0);assert.deepEqual(h.writes,[]);
+ assert.equal(h.document.querySelector('#modal-root').innerHTML,review);
+ assert.equal(JSON.stringify(h.controller.currentDraft()),draft);assert.deepEqual(h.apiCalls,['state']);
+});
+
+test('A delayed scan after advancing Add Material cannot mutate its review or save stock',async()=>{
+ const h=await app();enterMaterial(h);await h.controller.startCamera();
+ const callback=h.scanners[0].options.onCode;
+ h.submit();await flush();assert.equal(h.controller.currentDraft().step,2);
+ const review=h.document.querySelector('#modal-root').innerHTML,draft=JSON.stringify(h.controller.currentDraft());
+ await callback(barcode);await flush();
+ assert.equal(h.document.querySelector('#modal-root').innerHTML,review);
+ assert.equal(JSON.stringify(h.controller.currentDraft()),draft);
+ assert.equal(h.scanners[0].stops,1);assert.equal(h.active.size,0);assert.deepEqual(h.apiCalls,['state']);
+});
+
+test('A scan awaiting old-stream cleanup cannot replace a newer Add Material confirmation',async()=>{
+ const h=await app(),stop=deferred(),choices=deferred();enterMaterial(h,{quantity:9});
+ h.plan({stop,choices});await h.controller.startCamera();
+ const scan=h.scanners[0].options.onCode(barcode);await flush();
+ h.submit();await flush();assert.equal(h.controller.currentDraft().step,2);
+ const review=h.document.querySelector('#modal-root').innerHTML,draft=JSON.stringify(h.controller.currentDraft());
+ stop.resolve();choices.resolve({cameras:[{id:'late',label:'Late camera'}],selectedId:'late'});
+ await scan;await h.controller.stopCamera();await flush();
+ assert.equal(h.document.querySelector('#modal-root').innerHTML,review);
+ assert.equal(JSON.stringify(h.controller.currentDraft()),draft);
+ assert.equal(h.document.querySelector('#scan-camera'),null);
+ assert.equal(h.scanners.length,1);assert.equal(h.active.size,0);assert.deepEqual(h.writes,[]);
+ assert.deepEqual(h.apiCalls,['state']);
+});
 
 test('Rapid camera changes release the old stream before starting only the latest selection',async()=>{
  const h=await app(),oldStop=deferred();h.plan({stop:oldStop});

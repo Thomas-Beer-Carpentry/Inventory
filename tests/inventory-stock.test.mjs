@@ -10,6 +10,7 @@ const barcode='0005901234123457';
 const aliasBarcode='5901234123457';
 const decode=value=>value.replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
 const move=(itemId,type,quantity,jobId=null)=>({id:crypto.randomUUID(),itemId,type,quantity,jobId});
+const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};};
 async function until(predicate,message='The actual app did not finish the expected transition'){
  for(let attempt=0;attempt<300;attempt++){if(predicate())return;await new Promise(setImmediate);}
  assert.ok(predicate(),message);
@@ -108,14 +109,18 @@ async function fixture(){
 async function app(t,{source=appSource,setup=async()=>{}}={}){
  const f=await fixture();t.after(()=>f.store.close());
  await setup(f);
- const document=new Document(),apiCalls=[],scanners=[];
+ const document=new Document(),apiCalls=[],scanners=[],stockInPlans=[];
  const windowHandlers=new Map();let hash='';
  const location={href:'https://workshop.test/Inventory/',get hash(){return hash;},set hash(value){hash=value?'#'+String(value).replace(/^#/,''):'';}};
  const window={addEventListener(name,handler){if(!windowHandlers.has(name))windowHandlers.set(name,[]);windowHandlers.get(name).push(handler);}};
  const collaborators={
   document,window,console,crypto,URL,Intl,Date,
   location,setTimeout(){return 1;},clearTimeout(){},
-  phoneInventory:{async request(path,body){apiCalls.push({path,body});return f.store.request(path,body);}},
+  phoneInventory:{async request(path,body){
+   apiCalls.push({path,body});const plan=path==='items/stock-in'?stockInPlans.shift():null;
+   if(plan?.gate)await plan.gate.promise;if(plan?.beforeError)throw plan.beforeError;
+   const result=await f.store.request(path,body);if(plan?.afterError)throw plan.afterError;return result;
+  }},
   prepareOffline(){},isAndroidApp:()=>false,androidBackup(){throw new Error('Unexpected native backup');},
   readCameraPreference:()=>'',saveCameraPreference(){},cameraError:error=>error.message||String(error),
   createCameraScanner(options){const scanner={options,stops:0,ready:Promise.resolve(),async stop(){scanner.stops++;},async cameraChoices(){return {cameras:[],selectedId:''};}};scanners.push(scanner);return scanner;},
@@ -128,12 +133,25 @@ async function app(t,{source=appSource,setup=async()=>{}}={}){
  const controller=vm.runInNewContext(source.replace(/^import[^\n]*\n/gm,'')+'\n;({startCamera,stopCamera,refresh,currentDraft:()=>draft,state:()=>data,isLoading:()=>loading,visibleStockItems:()=>visibleStockItems()});',collaborators,{filename:'app.js'});
  await until(()=>!controller.isLoading());assert.equal(controller.state().user.configured,true);
  t.after(()=>controller.stopCamera());
- return {...f,document,controller,apiCalls,scanners,navigate(hash){location.hash='#'+hash;for(const handler of windowHandlers.get('hashchange')||[])handler();},submit(){const form=document.querySelector('#modal-form');assert.ok(form,'The actual app must render its form');return form.requestSubmit();}};
+ return {...f,document,controller,apiCalls,scanners,planStockIn(plan){stockInPlans.push(plan);},navigate(hash){location.hash='#'+hash;for(const handler of windowHandlers.get('hashchange')||[])handler();},submit(){const form=document.querySelector('#modal-form');assert.ok(form,'The actual app must render its form');return form.requestSubmit();},forceSubmit(){const form=document.querySelector('#modal-form');assert.ok(form);document.dispatch('submit',{target:form,preventDefault(){}});}};
 }
 const stockIds=h=>Array.from(h.controller.visibleStockItems(),item=>item.id).sort();
 const stockRows=h=>h.document.querySelector('#inventory-results').querySelectorAll('.stock-row');
 const options=h=>h.document.querySelector('#manual-item').querySelectorAll('option').map(option=>option.value).filter(Boolean).sort();
 const itemWrites=h=>h.apiCalls.filter(call=>call.path==='items');
+const materialStockIns=h=>h.apiCalls.filter(call=>call.path==='items/stock-in');
+const writes=h=>h.apiCalls.filter(call=>!['state','export'].includes(call.path));
+function fillMaterial(h,{name='',barcode:code='',unit='boxes',quantity=1}={}){
+ h.document.clickRendered('newitem');assert.equal(h.controller.currentDraft().kind,'item');assert.equal(h.controller.currentDraft().step,1);
+ assert.equal(h.document.querySelector('#item-qty').value,'1');assert.equal(h.document.querySelector('#item-barcode').required,false);
+ h.document.input('item-name',name);h.document.input('item-barcode',code);h.document.input('item-unit',unit);h.document.input('item-qty',String(quantity));
+}
+async function reviewMaterial(h){assert.equal(h.submit(),true);await until(()=>h.controller.currentDraft()?.kind==='item'&&h.controller.currentDraft()?.step===2);}
+async function saveMaterial(h){
+ const id=h.controller.currentDraft().id;assert.equal(h.controller.currentDraft().step,2);assert.equal(h.submit(),true);
+ await until(()=>!h.controller.currentDraft()&&h.controller.state().movements.some(movement=>movement.id===id),'Confirm must save the material and close its review without a success popup');
+ assert.equal(h.document.querySelector('#modal-root').innerHTML,'');return h.store.request('state');
+}
 function assertStockCounts(h,count){
  const panel=h.document.querySelector('#app').querySelector('.panel');
  assert.match(panel.querySelector('.meta').textContent,new RegExp('^'+count+'\\b'));
@@ -206,13 +224,13 @@ test('Workshop stock puts quantities first without displaying barcodes and keeps
 for(const {unit,title,label,code} of [{unit:'bottles',title:'Bottle',label:/^bottles?$/i,code:'BOTTLE-NEW-0001'},{unit:'tubs',title:'Tub',label:/^tubs?$/i,code:'TUB-NEW-0001'}]){
  test('Adding a '+title+' material saves its plural unit through Stock In, job take, return and reopen',async t=>{
   const h=await app(t);h.document.clickRendered('newitem');
+  assert.equal(h.controller.currentDraft().step,1);
   const option=h.document.querySelector('#item-unit').querySelectorAll('option').find(option=>option.value===unit);
   assert.ok(option,title+' must be selectable in Add Material');assert.match(option.textContent.trim(),label);
-  h.document.input('item-name',title+' material');h.document.input('item-barcode',code);h.document.input('item-unit',option.value);assert.equal(h.submit(),true);
-  await until(()=>h.controller.currentDraft()?.kind==='move'&&h.controller.currentDraft()?.step===2);
-  const itemId=h.controller.currentDraft().itemId;let state=await h.store.request('state');
-  assert.deepEqual([state.items.find(item=>item.id===itemId).unit,state.items.find(item=>item.id===itemId).quantity],[unit,0]);
-  await confirmQuantity(h,3);h.document.clickRendered('done');
+  h.document.input('item-name',title+' material');h.document.input('item-barcode',code);h.document.input('item-unit',option.value);h.document.input('item-qty','3');await reviewMaterial(h);
+  assert.equal(writes(h).length,0);assert.equal((await h.store.request('state')).items.length,4);
+  let state=await saveMaterial(h);const itemId=state.items.find(item=>item.barcode===code).id;
+  assert.deepEqual([state.items.find(item=>item.id===itemId).unit,state.items.find(item=>item.id===itemId).quantity],[unit,3]);
   let row=stockRows(h).find(row=>row.querySelector('button').dataset.item===itemId);assert.ok(row);
   assert.equal(row.querySelector('.stock-quantity').textContent.replace(/\s/g,''),'3'+unit);assert.equal(row.textContent.includes(code),false);
   h.document.click('stockout');h.document.input('manual-item',itemId);assert.equal(h.submit(),true);
@@ -238,51 +256,109 @@ test('Confirming the last Stock Out removes its Workshop row while Stock In keep
  assert.deepEqual(options(h),[h.nails,h.timber,h.alias,h.unused].sort());
 });
 
-test('Typing a remembered exact barcode with no description opens Stock In for the same material and replenishes it',async t=>{
- const h=await app(t);h.document.click('newitem');
+test('Typing a remembered exact barcode reviews its saved description and replenishes the same material on confirmation',async t=>{
+ const h=await app(t);fillMaterial(h,{barcode,quantity:4});
  assert.equal(h.document.querySelector('#item-name').required,false,'Known barcode must pass browser form validation without a name');
- h.document.input('item-barcode',barcode);assert.equal(h.submit(),true);
- await until(()=>h.controller.currentDraft()?.kind==='move'&&h.controller.currentDraft()?.step===2,'Known typed barcode must open its existing Stock In quantity form');
- const draft=h.controller.currentDraft();assert.deepEqual([draft.type,draft.itemId,draft.step],['STOCK_IN',h.nails,2]);
- assert.equal(itemWrites(h).length,0,'Known barcode must be found before any item creation request');
+ await reviewMaterial(h);
+ const draft=h.controller.currentDraft();assert.deepEqual([draft.name,draft.barcode,draft.unit,draft.quantity],['90mm Galvanised Nails',barcode,'boxes',4]);
+ assert.equal(writes(h).length,0,'Reviewing a known barcode must not save stock');
  assert.equal(h.document.invalidSubmissions,0);assert.match(h.document.querySelector('#modal-root').innerHTML,/90mm Galvanised Nails/);
- await confirmQuantity(h,4);
- const state=await h.store.request('state'),item=state.items.find(item=>item.id===h.nails);
+ assert.equal((await h.store.request('state')).items.find(item=>item.id===h.nails).quantity,0);
+ const state=await saveMaterial(h),item=state.items.find(item=>item.id===h.nails);
  assert.deepEqual([item.name,item.barcode,item.unit,item.quantity],['90mm Galvanised Nails',barcode,'boxes',4]);
  assert.equal(state.items.length,4);assert.ok(stockIds(h).includes(h.nails));assertStockCounts(h,3);
+ assert.equal(materialStockIns(h).length,1);assert.equal(itemWrites(h).length,0);
  assert.deepEqual(state.movements.at(-1).item_id,h.nails);assert.deepEqual([state.movements.at(-1).before,state.movements.at(-1).after],[0,4]);
 });
 
-test('Scanning a remembered barcode in Add Material opens its quantity form without description or catalog writes',async t=>{
- const h=await app(t);h.document.click('newitem');await h.controller.startCamera();
+test('Scanning a remembered barcode fills the first popup and keeps the typed quantity until review and confirmation',async t=>{
+ const h=await app(t);fillMaterial(h,{unit:'tubs',quantity:7});const id=h.controller.currentDraft().id;await h.controller.startCamera();
  assert.equal(h.scanners.length,1);await h.scanners[0].options.onCode(barcode);
- await until(()=>h.controller.currentDraft()?.kind==='move'&&h.controller.currentDraft()?.step===2);
- assert.deepEqual([h.controller.currentDraft().type,h.controller.currentDraft().itemId],['STOCK_IN',h.nails]);
- assert.equal(h.scanners[0].stops,1);assert.equal(itemWrites(h).length,0);
- assert.equal(h.apiCalls.some(call=>call.path==='movements'),false,'Scanning only prepares a movement; confirmation is still required');
+ assert.deepEqual([h.controller.currentDraft().kind,h.controller.currentDraft().step,h.controller.currentDraft().id],['item',1,id]);
+ assert.deepEqual(['item-name','item-barcode','item-unit','item-qty'].map(field=>h.document.querySelector('#'+field).value),['90mm Galvanised Nails',barcode,'boxes','7']);
+ assert.equal(h.scanners[0].stops,1);assert.equal(writes(h).length,0);
  assert.equal((await h.store.request('state')).items.find(item=>item.id===h.nails).quantity,0);
+ await reviewMaterial(h);assert.equal(h.controller.currentDraft().quantity,7);assert.equal(h.controller.currentDraft().id,id);assert.equal(writes(h).length,0);
+ const state=await saveMaterial(h);assert.equal(state.items.find(item=>item.id===h.nails).quantity,7);assert.equal(state.items.length,4);
 });
 
 test('Leading-zero barcode identity and existing material details survive a known typed barcode with other form details',async t=>{
- const h=await app(t);h.document.click('newitem');
- h.document.input('item-name','Do not overwrite');h.document.input('item-unit','bags');h.document.input('item-barcode',aliasBarcode);assert.equal(h.submit(),true);
- await until(()=>h.controller.currentDraft()?.kind==='move');
- assert.equal(h.controller.currentDraft().itemId,h.alias);assert.notEqual(h.controller.currentDraft().itemId,h.nails);
- assert.equal(itemWrites(h).length,0);
- const state=await h.store.request('state');assert.deepEqual(state.items.filter(item=>[h.nails,h.alias].includes(item.id)).map(item=>[item.id,item.name,item.barcode,item.unit]).sort(),[[h.nails,'90mm Galvanised Nails',barcode,'boxes'],[h.alias,'Numeric alias',aliasBarcode,'packs']].sort());
+ const h=await app(t);fillMaterial(h,{name:'Do not overwrite',unit:'bags',barcode:aliasBarcode,quantity:2});await reviewMaterial(h);
+ assert.deepEqual([h.controller.currentDraft().name,h.controller.currentDraft().barcode,h.controller.currentDraft().unit],['Numeric alias',aliasBarcode,'packs']);assert.equal(writes(h).length,0);
+ const state=await saveMaterial(h);assert.deepEqual(state.items.filter(item=>[h.nails,h.alias].includes(item.id)).map(item=>[item.id,item.name,item.barcode,item.unit]).sort(),[[h.nails,'90mm Galvanised Nails',barcode,'boxes'],[h.alias,'Numeric alias',aliasBarcode,'packs']].sort());
+ assert.equal(state.items.find(item=>item.id===h.alias).quantity,3);assert.equal(state.items.find(item=>item.id===h.nails).quantity,0);assert.equal(state.items.length,4);
 });
 
-test('An unknown barcode still needs a valid material name and unique catalog entry before Stock In',async t=>{
- const h=await app(t);h.document.click('newitem');h.document.input('item-barcode','UNSEEN-00042');assert.equal(h.submit(),true);
+test('A new barcode needs a description and creates its material and opening stock only after the review confirmation',async t=>{
+ const h=await app(t);fillMaterial(h,{barcode:'UNSEEN-00042',quantity:3});h.forceSubmit();
  await until(()=>h.controller.currentDraft()?.error);
  assert.match(h.controller.currentDraft().error,/material name/i);assert.equal((await h.store.request('state')).items.length,4);
- h.document.input('item-name','New concrete');h.document.input('item-unit','bags');assert.equal(h.submit(),true);
- await until(()=>h.controller.currentDraft()?.kind==='move'&&h.controller.currentDraft()?.step===2);
- const added=(await h.store.request('state')).items.find(item=>item.barcode==='UNSEEN-00042');
- assert.ok(added);assert.deepEqual([added.name,added.unit,added.quantity],['New concrete','bags',0]);
- assert.equal(h.controller.currentDraft().itemId,added.id);assert.equal(stockIds(h).includes(added.id),false);
- await assert.rejects(h.store.request('items',{name:'Duplicate material',barcode:'UNSEEN-00042',unit:'bags'}),/barcode already belongs/i);
- assert.equal((await h.store.request('state')).items.length,5);assert.equal((await h.store.request('state')).movements.length,4);
+ assert.equal(writes(h).length,0);h.document.input('item-name','New concrete');h.document.input('item-unit','bags');await reviewMaterial(h);
+ assert.equal(writes(h).length,0);assert.equal((await h.store.request('state')).items.length,4);assert.equal(h.document.querySelector('#item-qty'),null);
+ const state=await saveMaterial(h),added=state.items.find(item=>item.barcode==='UNSEEN-00042');
+ assert.ok(added);assert.deepEqual([added.name,added.unit,added.quantity],['New concrete','bags',3]);assert.ok(stockIds(h).includes(added.id));
+ assert.equal(state.items.length,5);assert.equal(state.movements.length,5);assert.equal(materialStockIns(h).length,1);assert.equal(itemWrites(h).length,0);
+ assert.deepEqual([state.movements.at(-1).type,state.movements.at(-1).item_id,state.movements.at(-1).before,state.movements.at(-1).after],['STOCK_IN',added.id,0,3]);
+});
+
+test('A material without a barcode saves in two popups and remains selectable for later takes, returns and restocking',async t=>{
+ const h=await app(t);fillMaterial(h,{name:'Loose concrete',unit:'bags',quantity:2});await reviewMaterial(h);
+ const confirmationId=h.controller.currentDraft().id;assert.equal(writes(h).length,0);assert.equal((await h.store.request('state')).items.length,4);
+ let state=await saveMaterial(h),item=state.items.find(item=>item.name==='Loose concrete');assert.ok(item);const itemId=item.id;
+ assert.ok(item.barcode==null||item.barcode==='');assert.equal(item.quantity,2);assert.equal(state.movements.at(-1).id,confirmationId);
+ assert.equal(materialStockIns(h).length,1);assert.equal(itemWrites(h).length,0);
+ h.document.click('stockout',{job:h.job});assert.ok(options(h).includes(itemId));h.document.input('manual-item',itemId);assert.equal(h.submit(),true);
+ await until(()=>h.controller.currentDraft()?.step===2);await confirmQuantity(h,2);h.document.clickRendered('done');assert.equal(stockIds(h).includes(itemId),false);
+ h.navigate('job/'+h.job);h.document.clickRendered('return');assert.ok(options(h).includes(itemId));h.document.input('manual-item',itemId);assert.equal(h.submit(),true);
+ await until(()=>h.controller.currentDraft()?.step===2);await confirmQuantity(h,1);h.document.clickRendered('done');h.navigate('inventory');
+ h.document.click('stockin');assert.ok(options(h).includes(itemId));h.document.input('manual-item',itemId);assert.equal(h.submit(),true);
+ await until(()=>h.controller.currentDraft()?.step===2);await confirmQuantity(h,3);h.document.clickRendered('done');
+ state=await h.store.request('state');assert.equal(state.items.find(item=>item.id===itemId).quantity,4);
+ assert.deepEqual(state.movements.filter(movement=>movement.item_id===itemId).map(movement=>[movement.type,movement.quantity,movement.before,movement.after]),[['STOCK_IN',2,0,2],['TAKEN_TO_JOB',2,2,0],['RETURNED_TO_WORKSHOP',1,0,1],['STOCK_IN',3,1,4]]);
+ fillMaterial(h,{name:'Another manual material',unit:'pieces',quantity:1});await reviewMaterial(h);state=await saveMaterial(h);
+ const another=state.items.find(item=>item.name==='Another manual material');assert.ok(another);assert.notEqual(another.id,itemId);
+ assert.equal(state.items.length,6);assert.equal(state.items.find(item=>item.id===itemId).name,'Loose concrete');
+});
+
+test('Back keeps all Add Material inputs and cancellation at either popup leaves stock and history untouched',async t=>{
+ const h=await app(t),before=await h.store.request('state');fillMaterial(h,{name:'Loose screws',unit:'pieces',quantity:9});const id=h.controller.currentDraft().id;
+ await reviewMaterial(h);h.document.clickRendered('backstep');
+ assert.deepEqual([h.controller.currentDraft().kind,h.controller.currentDraft().step,h.controller.currentDraft().id],['item',1,id]);
+ assert.deepEqual(['item-name','item-barcode','item-unit','item-qty'].map(field=>h.document.querySelector('#'+field).value),['Loose screws','','pieces','9']);
+ h.document.input('item-name','Edited screws');h.document.input('item-qty','8');await reviewMaterial(h);
+ assert.equal(h.controller.currentDraft().id,id);assert.deepEqual([h.controller.currentDraft().name,h.controller.currentDraft().quantity],['Edited screws',8]);
+ h.document.clickRendered('close');assert.equal(h.controller.currentDraft(),null);assert.equal(writes(h).length,0);
+ assert.deepEqual(await h.store.request('state'),before);
+ fillMaterial(h,{name:'Discard this',barcode:'UNSAVED-001',quantity:5});h.document.clickRendered('close');
+ assert.equal(writes(h).length,0);assert.deepEqual(await h.store.request('state'),before);
+});
+
+test('Invalid Add Material quantities cannot reach review or save; the upper bound remains valid',async t=>{
+ const h=await app(t),before=await h.store.request('state');fillMaterial(h,{name:'Validation material',barcode:'VALIDATION-42'});
+ for(const quantity of ['',0,-1,.5,1000001]){
+  h.document.input('item-qty',String(quantity));h.forceSubmit();await until(()=>h.controller.currentDraft()?.error);
+  assert.equal(h.controller.currentDraft().step,1);assert.match(h.controller.currentDraft().error,/quantity/i);assert.equal(writes(h).length,0);
+ }
+ assert.deepEqual(await h.store.request('state'),before);
+ h.document.input('item-qty','1000000');await reviewMaterial(h);assert.equal(h.controller.currentDraft().quantity,1000000);
+ assert.equal(writes(h).length,0);h.document.clickRendered('close');assert.deepEqual(await h.store.request('state'),before);
+});
+
+test('Busy double-confirm and retries before or after a committed response failure save one material and one movement',async t=>{
+ const h=await app(t),before=await h.store.request('state');fillMaterial(h,{name:'Retry material',barcode:'RETRY-NEW-43',unit:'bags',quantity:2});await reviewMaterial(h);
+ const id=h.controller.currentDraft().id,gate=deferred();h.planStockIn({gate,beforeError:new Error('Storage is unavailable')});assert.equal(h.submit(),true);
+ await until(()=>materialStockIns(h).length===1);h.forceSubmit();assert.equal(materialStockIns(h).length,1);assert.equal(h.controller.currentDraft().busy,true);
+ gate.resolve();await until(()=>h.controller.currentDraft()?.error);
+ assert.deepEqual([h.controller.currentDraft().step,h.controller.currentDraft().id,h.controller.currentDraft().busy],[2,id,false]);
+ assert.match(h.controller.currentDraft().error,/Storage is unavailable/);assert.deepEqual(await h.store.request('state'),before);
+ h.planStockIn({afterError:new Error('Saved response interrupted')});assert.equal(h.submit(),true);
+ await until(()=>h.controller.currentDraft()?.error==='Saved response interrupted');assert.equal(h.controller.currentDraft().id,id);assert.equal(h.controller.currentDraft().step,2);
+ const committed=await h.store.request('state');assert.equal(committed.items.length,5);assert.equal(committed.movements.length,5);
+ assert.equal(committed.movements.at(-1).id,id);assert.equal(committed.items.find(item=>item.barcode==='RETRY-NEW-43').quantity,2);
+ const state=await saveMaterial(h);assert.deepEqual(state.items,committed.items);assert.deepEqual(state.movements,committed.movements);
+ assert.equal(materialStockIns(h).length,3);assert.ok(materialStockIns(h).every(call=>call.body.id===id));
+ assert.ok(materialStockIns(h).every(call=>call.body.quantity===2&&call.body.barcode==='RETRY-NEW-43'));
+ assert.equal(itemWrites(h).length,0);
 });
 
 test('Stock Out offers positive quantities and a scanned depleted item fails before the quantity step',async t=>{
