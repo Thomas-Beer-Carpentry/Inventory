@@ -11,6 +11,8 @@ const barcodeValue=value=>{
 };
 const canonical=value=>value.normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();
 const itemCodes=item=>[...(item.barcode==null?[]:[item.barcode]),...(item.barcode_aliases||[])];
+const withBarcode=(item,barcode)=>itemCodes(item).includes(barcode)?item:item.barcode==null?{...item,barcode}:{...item,barcode_aliases:[...(item.barcode_aliases||[]),barcode]};
+const withoutDeletion=item=>{const restored={...item};delete restored.deleted_at;delete restored.deleted_by;delete restored.deleted_by_id;return restored;};
 const identifier=(value,label)=>{if(typeof value!=='string'||!/^[a-zA-Z0-9-]{10,80}$/.test(value))throw new Error('The backup contains an invalid '+label+'.');return value;};
 const positive=value=>{if(!Number.isSafeInteger(value)||value<1||value>1000000)throw new Error('Enter a whole quantity greater than zero.');return value;};
 const stamp=value=>{if(typeof value!=='string'||!Number.isFinite(Date.parse(value)))throw new Error('The backup contains an invalid date.');return value;};
@@ -23,6 +25,9 @@ function validateBackup(backup){
    if(!Array.isArray(raw.barcode_aliases))throw new Error('The backup contains invalid barcode aliases.');
    item.barcode_aliases=Array.from(raw.barcode_aliases,value=>{const code=barcodeValue(value);if(code===null)throw new Error('The backup contains invalid barcode aliases.');return code;});
   }
+  if(raw.deleted_at!==undefined)item.deleted_at=stamp(raw.deleted_at);
+  if(raw.deleted_by!==undefined)item.deleted_by=text(raw.deleted_by,'deleting user');
+  if(raw.deleted_by_id!==undefined)item.deleted_by_id=identifier(raw.deleted_by_id,'deleting user ID');
   if(itemMap.has(item.id)||!Number.isSafeInteger(item.quantity)||item.quantity<0)throw new Error('The backup has invalid or duplicate materials.');
   for(const code of itemCodes(item)){if(barcodes.has(code))throw new Error('The backup has invalid or duplicate barcodes.');barcodes.add(code);}
   itemMap.set(item.id,item);quantities.set(item.id,0);return item;
@@ -86,6 +91,23 @@ export function createPhoneStore({indexedDB=globalThis.indexedDB,IDBKeyRange=glo
     if(barcode!==null&&(await requestValue(stores.items.getAll())).some(item=>itemCodes(item).includes(barcode)))throw new Error('That barcode already belongs to an item.');
     const item={id:createId(),name,barcode,unit,quantity:0,created_at:now()};await requestValue(stores.items.add(item));return {id:item.id};
    }
+   const itemAction=path.match(/^items\/([^/]+)\/(delete|restore|barcodes)$/);
+   if(itemAction){
+    const item=await requestValue(stores.items.get(itemAction[1]));if(!item)throw new Error('This item could not be found.');
+    if(itemAction[2]==='delete'){
+     const operator=await requestValue(stores.meta.get('operator'));if(!operator)throw new Error('Set your scanning name in Phone data before deleting a material.');
+     if(!item.deleted_at)await requestValue(stores.items.put({...item,deleted_at:now(),deleted_by:operator.value.name,deleted_by_id:operator.value.id}));
+    }else if(itemAction[2]==='restore'){
+     if(['deleted_at','deleted_by','deleted_by_id'].some(key=>Object.hasOwn(item,key)))await requestValue(stores.items.put(withoutDeletion(item)));
+    }else{
+     if(item.deleted_at)throw new Error('Restore this deleted material before adding a barcode.');
+     const barcode=barcodeValue(body?.barcode);if(barcode===null)throw new Error('Enter a valid barcode.');
+     const owner=(await requestValue(stores.items.getAll())).find(saved=>itemCodes(saved).includes(barcode));
+     if(owner&&owner.id!==item.id)throw new Error('That barcode already belongs to another item.');
+     if(!owner)await requestValue(stores.items.put(withBarcode(item,barcode)));
+    }
+    return {ok:true};
+   }
    if(path==='items/stock-in'){
     const {id,quantity}=body||{};
     if(typeof id!=='string'||!/^[a-zA-Z0-9-]{10,80}$/.test(id))throw new Error('Please start a new transaction.');
@@ -112,14 +134,15 @@ export function createPhoneStore({indexedDB=globalThis.indexedDB,IDBKeyRange=glo
     if(!savedItem){
      name=text(body.name,'material name');unit=text(body.unit,'unit',30);
      const matches=items.filter(item=>canonical(item.name)===canonical(name)&&canonical(item.unit)===canonical(unit));
-     if(matches.length>1)throw new Error('More than one saved material matches. Choose a material from the dropdown.');
-     savedItem=matches[0]||null;
+     const active=matches.filter(item=>!item.deleted_at);
+     if(active.length>1)throw new Error('More than one saved material matches. Choose a material from the dropdown.');
+     if(!active.length&&matches.length)throw new Error('Restore the deleted material before adding stock.');
+     savedItem=active[0]||null;
     }
+    if(savedItem?.deleted_at)throw new Error('Restore this deleted material before adding stock.');
     const createdAt=now();
     let item=savedItem||{id:createId(),name,barcode,unit,quantity:0,created_at:createdAt};
-    if(barcode!==null&&!itemCodes(item).includes(barcode)){
-     item=item.barcode==null?{...item,barcode}:{...item,barcode_aliases:[...(item.barcode_aliases||[]),barcode]};
-    }
+    if(barcode!==null)item=withBarcode(item,barcode);
     const after=item.quantity+quantity;if(!Number.isSafeInteger(after)||after<0)throw new Error('The resulting stock quantity is invalid.');
     const sequence=(await requestValue(stores.meta.get('sequence')))?.value||0;
     const movement={id,item_id:item.id,job_id:null,type:'STOCK_IN',quantity,created_at:createdAt,sequence:sequence+1,user_id:operator.value.id,user_name:operator.value.name,item_name:item.name,unit:item.unit,client_name:null,job_name:null,before:item.quantity,after};
@@ -150,6 +173,7 @@ export function createPhoneStore({indexedDB=globalThis.indexedDB,IDBKeyRange=glo
     if(type==='STOCK_IN'&&jobId)throw new Error('Use Return Stock to return materials from a job.');
     if(type!=='STOCK_IN'&&!jobId)throw new Error('Select a destination job.');
     const item=await requestValue(stores.items.get(itemId));if(!item)throw new Error('This item could not be found.');
+    if(item.deleted_at&&type!=='RETURNED_TO_WORKSHOP')throw new Error('Restore this deleted material before adding stock or taking it to a job.');
     const job=jobId?await requestValue(stores.jobs.get(jobId)):null;
     if(jobId&&!job)throw new Error('Select a valid job.');
     if(type==='TAKEN_TO_JOB'&&job.deleted_at)throw new Error('This job was deleted. Select an active destination job.');
@@ -159,7 +183,8 @@ export function createPhoneStore({indexedDB=globalThis.indexedDB,IDBKeyRange=glo
     const after=item.quantity+(type==='TAKEN_TO_JOB'?-quantity:quantity);if(!Number.isSafeInteger(after)||after<0)throw new Error('The resulting stock quantity is invalid.');
     const sequence=(await requestValue(stores.meta.get('sequence')))?.value||0;
     const movement={id,item_id:itemId,job_id:jobId,type,quantity,created_at:now(),sequence:sequence+1,user_id:operator.value.id,user_name:operator.value.name,item_name:item.name,unit:item.unit,client_name:job?.client||null,job_name:job?.name||null,before:item.quantity,after};
-    await requestValue(stores.items.put({...item,quantity:after}));await requestValue(stores.movements.add(movement));await requestValue(stores.meta.put({key:'sequence',value:sequence+1}));return {movement};
+    const savedItem=type==='RETURNED_TO_WORKSHOP'?withoutDeletion(item):item;
+    await requestValue(stores.items.put({...savedItem,quantity:after}));await requestValue(stores.movements.add(movement));await requestValue(stores.meta.put({key:'sequence',value:sequence+1}));return {movement};
    }
    if(path==='restore'){
     const counts=await Promise.all([requestValue(stores.items.count()),requestValue(stores.jobs.count()),requestValue(stores.movements.count())]);if(counts.some(Boolean))throw new Error('Restore a backup into an empty phone inventory. Existing history stays unchanged.');

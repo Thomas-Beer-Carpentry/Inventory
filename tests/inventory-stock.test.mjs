@@ -110,7 +110,7 @@ async function fixture(){
 async function app(t,{source=appSource,setup=async()=>{}}={}){
  const f=await fixture();t.after(()=>f.store.close());
  await setup(f);
- const document=new Document(),apiCalls=[],scanners=[],stockInPlans=[];
+ const document=new Document(),apiCalls=[],scanners=[],stockInPlans=[],requestPlans=new Map();
  const windowHandlers=new Map();let hash='';
  const location={href:'https://workshop.test/Inventory/',get hash(){return hash;},set hash(value){hash=value?'#'+String(value).replace(/^#/,''):'';}};
  const window={addEventListener(name,handler){if(!windowHandlers.has(name))windowHandlers.set(name,[]);windowHandlers.get(name).push(handler);}};
@@ -118,7 +118,7 @@ async function app(t,{source=appSource,setup=async()=>{}}={}){
   document,window,console,crypto,URL,Intl,Date,
   location,setTimeout(){return 1;},clearTimeout(){},
   phoneInventory:{async request(path,body){
-   apiCalls.push({path,body});const plan=path==='items/stock-in'?stockInPlans.shift():null;
+   apiCalls.push({path,body});const plan=path==='items/stock-in'?stockInPlans.shift():requestPlans.get(path)?.shift();
    if(plan?.gate)await plan.gate.promise;if(plan?.beforeError)throw plan.beforeError;
    const result=await f.store.request(path,body);if(plan?.afterError)throw plan.afterError;return result;
   }},
@@ -134,7 +134,7 @@ async function app(t,{source=appSource,setup=async()=>{}}={}){
  const controller=vm.runInNewContext(source.replace(/^import[^\n]*\n/gm,'')+'\n;({startCamera,stopCamera,refresh,currentDraft:()=>draft,state:()=>data,isLoading:()=>loading,visibleStockItems:()=>visibleStockItems()});',collaborators,{filename:'app.js'});
  await until(()=>!controller.isLoading());assert.equal(controller.state().user.configured,true);
  t.after(()=>controller.stopCamera());
- return {...f,document,controller,apiCalls,scanners,planStockIn(plan){stockInPlans.push(plan);},navigate(hash){location.hash='#'+hash;for(const handler of windowHandlers.get('hashchange')||[])handler();},submit(){const form=document.querySelector('#modal-form');assert.ok(form,'The actual app must render its form');return form.requestSubmit();},forceSubmit(){const form=document.querySelector('#modal-form');assert.ok(form);document.dispatch('submit',{target:form,preventDefault(){}});}};
+ return {...f,document,controller,apiCalls,scanners,planStockIn(plan){stockInPlans.push(plan);},planRequest(path,plan){if(!requestPlans.has(path))requestPlans.set(path,[]);requestPlans.get(path).push(plan);},navigate(hash){location.hash='#'+hash;for(const handler of windowHandlers.get('hashchange')||[])handler();},submit(){const form=document.querySelector('#modal-form');assert.ok(form,'The actual app must render its form');return form.requestSubmit();},forceSubmit(){const form=document.querySelector('#modal-form');assert.ok(form);document.dispatch('submit',{target:form,preventDefault(){}});}};
 }
 const stockIds=h=>Array.from(h.controller.visibleStockItems(),item=>item.id).sort();
 const stockRows=h=>h.document.querySelector('#inventory-results').querySelectorAll('.stock-row');
@@ -445,6 +445,140 @@ test('A stale selection or a selected material with another saved barcode cannot
  select.innerHTML+='<option value="'+staleId+'">Stale saved material</option>';select.value=staleId;h.document.input('item-barcode',barcode);h.forceSubmit();
  assert.equal(h.controller.currentDraft().step,1);assert.match(h.controller.currentDraft().error,/saved material|dropdown/i);assert.equal(writes(h).length,0);
  assert.deepEqual(await h.store.request('state'),before);
+});
+
+const materialManagerIds=h=>h.document.querySelector('#app').querySelectorAll('button').filter(button=>button.dataset.action==='materialmanage').map(button=>button.dataset.item).sort();
+const codesOf=item=>[item.barcode,...(item.barcode_aliases||[])].filter(Boolean);
+function openMaterialManager(h,itemId){
+ const target=h.document.querySelector('#app').querySelectorAll('button').find(button=>button.dataset.action==='materialmanage'&&button.dataset.item===itemId);
+ assert.ok(target,'The material must have a Manage action');h.document.dispatch('click',{target});
+ assert.deepEqual([h.controller.currentDraft().kind,h.controller.currentDraft().itemId],['material',itemId]);
+}
+function currentMaterialFilter(h){return h.document.querySelectorAll('button').find(button=>button.dataset.action==='materialfilter'&&button.className.split(' ').includes('active'))?.dataset.status;}
+function assertStockAndLedgerUnchanged(before,after){
+ const stock=state=>state.items.map(({id,name,unit,quantity,created_at})=>({id,name,unit,quantity,created_at})).sort((a,b)=>a.id.localeCompare(b.id));
+ assert.deepEqual(stock(after),stock(before));assert.deepEqual(after.movements,before.movements);
+}
+async function saveBarcode(h,code,{scan=false}={}){
+ const calls=writes(h).length,itemId=h.controller.currentDraft().itemId;
+ if(scan){await h.controller.startCamera();await h.scanners.at(-1).options.onCode(code);}
+ else h.document.input('material-barcode',code);
+ assert.equal(writes(h).length,calls,'Entering or scanning a manager barcode must wait for Save');assert.equal(h.controller.currentDraft().kind,'material');
+ assert.equal(h.document.querySelector('#material-barcode').value,code);assert.equal(h.submit(),true);
+ await until(()=>h.controller.currentDraft()?.kind==='material'&&!h.controller.currentDraft().busy&&h.document.querySelector('#material-barcode')?.value===''&&codesOf(h.controller.state().items.find(item=>item.id===itemId)).includes(code));
+ assert.ok(h.document.querySelector('.barcode-list').textContent.includes(code));
+}
+async function confirmMaterialAction(h,itemId,action){
+ h.document.clickRendered(action+'item');assert.deepEqual([h.controller.currentDraft().kind,h.controller.currentDraft().action,h.controller.currentDraft().itemId],['materialremove',action,itemId]);
+ assert.equal(h.submit(),true);await until(()=>!h.controller.currentDraft()&&!!h.controller.state().items.find(item=>item.id===itemId)?.deleted_at===(action==='delete'));
+}
+
+test('Manage materials opens from Workshop, includes all saved quantities, and preserves its filter without writing',async t=>{
+ const h=await app(t),before=await h.store.request('state');
+ const link=h.document.querySelector('#app').querySelectorAll('a').find(anchor=>anchor.attributes.href==='#materials');assert.ok(link);assert.match(link.textContent,/Manage materials/i);
+ for(const row of stockRows(h)){
+  const actions=row.querySelectorAll('button');assert.deepEqual(actions.map(button=>button.dataset.action),['stockin','materialmanage']);
+  assert.equal(actions[0].dataset.item,actions[1].dataset.item);
+ }
+ h.navigate('materials');assert.equal(currentMaterialFilter(h),'Active');assert.deepEqual(materialManagerIds(h),before.items.map(item=>item.id).sort());
+ openMaterialManager(h,h.unused);assert.match(h.document.querySelector('#modal-root').textContent,/0 pieces/);assert.ok(h.document.querySelector('.barcode-list').textContent.includes('EMPTY-NEW'));
+ h.document.clickRendered('close');h.document.click('materialfilter',{status:'Deleted'});assert.equal(materialManagerIds(h).length,0);
+ h.navigate('inventory');h.navigate('materials');assert.equal(currentMaterialFilter(h),'Deleted');
+ h.document.click('materialfilter',{status:'Active'});assert.equal(materialManagerIds(h).length,4);assert.equal(writes(h).length,0);assert.deepEqual(await h.store.request('state'),before);
+});
+
+test('Managing an earlier no-code material saves several brand barcodes without changing quantities or ledger and rejects another owner',async t=>{
+ const h=await app(t,{setup:async f=>{f.manual=(await f.store.request('items',{name:'Earlier manual material',barcode:null,unit:'bottles'})).id;await f.store.request('movements',move(f.manual,'STOCK_IN',7));}}),before=await h.store.request('state');
+ const codes=['000111222333','000444555666','BRAND-C-42'];h.navigate('materials');openMaterialManager(h,h.manual);
+ assert.equal(h.document.querySelector('#material-barcode').name,'barcode');assert.equal(h.document.querySelector('#item-qty'),null);assert.equal(h.document.querySelector('#move-qty'),null);
+ for(let index=0;index<codes.length;index++)await saveBarcode(h,codes[index],{scan:index===0});
+ let state=await h.store.request('state'),item=state.items.find(item=>item.id===h.manual);
+ assert.equal(item.barcode,codes[0]);assert.deepEqual(codesOf(item).sort(),[...codes].sort());assertStockAndLedgerUnchanged(before,state);
+ assert.equal(currentMaterialFilter(h),'Active');assert.equal(h.controller.currentDraft().kind,'material');assert.equal(h.document.querySelector('#material-barcode').value,'');
+ assert.deepEqual(h.apiCalls.filter(call=>call.path.endsWith('/barcodes')).map(call=>call.path),codes.map(()=> 'items/'+h.manual+'/barcodes'));
+ assert.ok(h.apiCalls.filter(call=>call.path.endsWith('/barcodes')).every(call=>Object.keys(call.body).join(',')==='barcode'));
+ h.document.input('material-barcode',aliasBarcode);assert.equal(h.submit(),true);await until(()=>h.controller.currentDraft()?.error);
+ assert.match(h.controller.currentDraft().error,/belongs|another|different/i);state=await h.store.request('state');assertStockAndLedgerUnchanged(before,state);
+ assert.deepEqual(codesOf(state.items.find(item=>item.id===h.manual)).sort(),[...codes].sort());
+ h.document.clickRendered('close');h.navigate('inventory');h.document.input('inventory-search',codes[2]);assert.deepEqual(stockIds(h),[h.manual]);
+ assert.ok(codes.every(code=>!stockRows(h)[0].textContent.includes(code)));h.document.input('inventory-search','');
+ h.document.click('stockin');await h.controller.startCamera();await h.scanners.at(-1).options.onCode(codes[0]);await until(()=>h.controller.currentDraft()?.step===2);
+ assert.equal(h.controller.currentDraft().itemId,h.manual);h.document.clickRendered('close');assertStockAndLedgerUnchanged(before,await h.store.request('state'));
+});
+
+test('Typed barcode consumers retain surrounding spaces and leading zeros when saving metadata and reusing the same material',async t=>{
+ const code=' 0001122334455 ';
+ const h=await app(t,{setup:async f=>{f.manual=(await f.store.request('items',{name:'Exact code material',barcode:null,unit:'pieces'})).id;await f.store.request('movements',move(f.manual,'STOCK_IN',4));}}),before=await h.store.request('state');
+ h.navigate('materials');openMaterialManager(h,h.manual);await saveBarcode(h,code);
+ let state=await h.store.request('state');assert.equal(state.items.find(item=>item.id===h.manual).barcode,code);assertStockAndLedgerUnchanged(before,state);
+ assert.equal(h.apiCalls.find(call=>call.path==='items/'+h.manual+'/barcodes').body.barcode,code);h.document.clickRendered('close');
+ fillMaterial(h,{barcode:code,quantity:2});await reviewMaterial(h);
+ assert.deepEqual([h.controller.currentDraft().itemId,h.controller.currentDraft().name,h.controller.currentDraft().unit,h.controller.currentDraft().barcode],[h.manual,'Exact code material','pieces',code]);
+ state=await saveMaterial(h);assert.equal(state.items.length,5);assert.equal(state.items.find(item=>item.id===h.manual).quantity,6);assert.equal(materialStockIns(h).at(-1).body.barcode,code);
+ h.navigate('inventory');h.document.clickRendered('stockin');h.document.input('scan-code',code);assert.equal(h.submit(),true);
+ await until(()=>h.controller.currentDraft()?.step===2);assert.deepEqual([h.controller.currentDraft().itemId,h.controller.currentDraft().barcode],[h.manual,code]);await confirmQuantity(h,3);
+ state=await h.store.request('state');assert.equal(state.items.length,5);assert.equal(state.items.find(item=>item.id===h.manual).quantity,9);
+ assert.deepEqual(codesOf(state.items.find(item=>item.id===h.manual)),[code]);assert.deepEqual(state.movements.slice(0,before.movements.length),before.movements);
+});
+
+test('Adding the same earlier manual Coffee material with two brand codes keeps one item and the combined quantity',async t=>{
+ const h=await app(t,{setup:async f=>{f.coffee=(await f.store.request('items',{name:'Coffee',barcode:null,unit:'tubs'})).id;await f.store.request('movements',move(f.coffee,'STOCK_IN',20));}});
+ fillMaterial(h,{name:'Coffee',unit:'tubs',barcode:'COFFEE-BRAND-A',quantity:5});await reviewMaterial(h);assert.equal(h.controller.currentDraft().itemId,h.coffee);assert.deepEqual(previewStock(h),['20','25']);
+ let state=await saveMaterial(h);assert.equal(state.items.length,5);assert.equal(state.items.find(item=>item.id===h.coffee).barcode,'COFFEE-BRAND-A');
+ fillMaterial(h,{name:' coffee ',unit:'tubs',barcode:'COFFEE-BRAND-B',quantity:3});await reviewMaterial(h);assert.equal(h.controller.currentDraft().itemId,h.coffee);assert.deepEqual(previewStock(h),['25','28']);state=await saveMaterial(h);
+ const item=state.items.find(item=>item.id===h.coffee);assert.equal(state.items.length,5);assert.equal(item.name,'Coffee');assert.equal(item.quantity,28);
+ assert.deepEqual(codesOf(item).sort(),['COFFEE-BRAND-A','COFFEE-BRAND-B']);
+ assert.deepEqual(state.movements.filter(movement=>movement.item_id===h.coffee).map(movement=>[movement.before,movement.after]),[[0,20],[20,25],[25,28]]);
+ assert.equal(stockRows(h).filter(row=>row.querySelector('.stock-material strong').textContent==='Coffee').length,1);
+});
+
+test('Material deletion requires confirmation, blocks duplicate busy submissions, hides ordinary selectors and retains Activity for stocked and zero items',async t=>{
+ const h=await app(t),before=await h.store.request('state');h.navigate('materials');openMaterialManager(h,h.timber);h.document.clickRendered('deleteitem');
+ assert.equal(h.controller.currentDraft().kind,'materialremove');assert.equal(writes(h).length,0);h.document.clickRendered('close');assert.deepEqual(await h.store.request('state'),before);
+ openMaterialManager(h,h.timber);h.document.clickRendered('deleteitem');const path='items/'+h.timber+'/delete',gate=deferred();h.planRequest(path,{gate});assert.equal(h.submit(),true);
+ await until(()=>h.apiCalls.some(call=>call.path===path));h.forceSubmit();assert.equal(h.apiCalls.filter(call=>call.path===path).length,1);gate.resolve();
+ await until(()=>!h.controller.currentDraft()&&h.controller.state().items.find(item=>item.id===h.timber)?.deleted_at);
+ assert.equal(currentMaterialFilter(h),'Active');openMaterialManager(h,h.unused);await confirmMaterialAction(h,h.unused,'delete');
+ const state=await h.store.request('state');assertStockAndLedgerUnchanged(before,state);
+ for(const id of [h.timber,h.unused]){const item=state.items.find(item=>item.id===id);assert.ok(Number.isFinite(Date.parse(item.deleted_at)));assert.equal(item.deleted_by,'Eryk');assert.equal(item.deleted_by_id,state.user.id);}
+ assert.deepEqual(materialManagerIds(h),[h.nails,h.alias].sort());h.document.click('materialfilter',{status:'Deleted'});assert.deepEqual(materialManagerIds(h),[h.timber,h.unused].sort());
+ h.navigate('inventory');assert.deepEqual(stockIds(h),[h.alias]);assertStockCounts(h,1);fillMaterial(h,{name:'Unused new material'});
+ assert.deepEqual(h.document.querySelector('#item-existing').querySelectorAll('option').map(option=>option.value).filter(Boolean).sort(),[h.nails,h.alias].sort());h.document.clickRendered('close');
+ h.document.click('stockout');assert.deepEqual(options(h),[h.alias]);h.document.clickRendered('close');h.document.click('stockin');assert.deepEqual(options(h),[h.nails,h.alias].sort());h.document.clickRendered('close');
+ for(const details of [{barcode:'67890'},{name:'90x45 Timber',unit:'lengths'}]){
+  fillMaterial(h,details);h.forceSubmit();await until(()=>h.controller.currentDraft()?.error);assert.match(h.controller.currentDraft().error,/restor/i);assert.equal(materialStockIns(h).length,0);h.document.clickRendered('close');
+ }
+ h.navigate('activity');const headings=h.document.querySelector('#app').querySelectorAll('h2');
+ const history=headings.find(heading=>heading.textContent==='All stock movements').closest('.panel');assert.equal(history.querySelectorAll('tbody tr').length,before.movements.length);
+ const deleted=headings.find(heading=>heading.textContent==='Deleted materials');assert.ok(deleted);const archive=deleted.closest('.panel');
+ assert.match(archive.textContent,/90x45 Timber/);assert.match(archive.textContent,/Never stocked/);assert.match(archive.textContent,/2lengths/);assert.match(archive.textContent,/0pieces/);assert.match(archive.textContent,/Eryk/);
+ for(const id of [h.timber,h.unused])assert.ok(archive.textContent.includes(new Intl.DateTimeFormat(undefined,{day:'numeric',month:'short',year:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(state.items.find(item=>item.id===id).deleted_at))));
+ assertStockAndLedgerUnchanged(before,await h.store.request('state'));
+});
+
+test('A deleted material manager keeps readonly barcodes and restoration returns its retained stock to the Active list without a movement',async t=>{
+ const h=await app(t,{setup:async f=>{await f.store.request('items/'+f.timber+'/barcodes',{barcode:'TIMBER-BRAND-B'});await f.store.request('items/'+f.timber+'/delete',{});}}),before=await h.store.request('state');
+ h.navigate('materials');h.document.click('materialfilter',{status:'Deleted'});openMaterialManager(h,h.timber);
+ assert.equal(h.document.querySelector('#material-barcode'),null);assert.ok(h.document.querySelector('.barcode-list').textContent.includes('67890'));assert.ok(h.document.querySelector('.barcode-list').textContent.includes('TIMBER-BRAND-B'));
+ assert.equal(h.document.querySelector('#modal-root').querySelectorAll('button').some(button=>button.dataset.action==='camera'||button.dataset.action==='deleteitem'),false);
+ h.document.clickRendered('restoreitem');assert.equal(writes(h).length,0);h.document.clickRendered('close');assert.deepEqual(await h.store.request('state'),before);
+ openMaterialManager(h,h.timber);await confirmMaterialAction(h,h.timber,'restore');
+ const state=await h.store.request('state');assertStockAndLedgerUnchanged(before,state);assert.equal(state.items.find(item=>item.id===h.timber).deleted_at,undefined);
+ assert.deepEqual(codesOf(state.items.find(item=>item.id===h.timber)),codesOf(before.items.find(item=>item.id===h.timber)));assert.equal(currentMaterialFilter(h),'Active');assert.ok(materialManagerIds(h).includes(h.timber));
+ h.navigate('inventory');assert.ok(stockIds(h).includes(h.timber));assertStockCounts(h,2);
+});
+
+test('Returning job-held stock through a deleted material alias restores the same item and preserves its earlier audit history',async t=>{
+ const code='000RETURN-BRAND-42';
+ const h=await app(t,{setup:async f=>{await f.store.request('items/'+f.nails+'/barcodes',{barcode:code});await f.store.request('items/'+f.nails+'/delete',{});}}),before=await h.store.request('state');
+ h.navigate('job/'+h.job);h.document.clickRendered('return');assert.ok(options(h).includes(h.nails));
+ await h.controller.startCamera();await h.scanners.at(-1).options.onCode(code);await until(()=>h.controller.currentDraft()?.step===2);assert.equal(h.controller.currentDraft().itemId,h.nails);
+ assert.match(h.document.querySelector('#modal-root').textContent,/restor/i);await confirmQuantity(h,1);
+ const state=await h.store.request('state'),item=state.items.find(item=>item.id===h.nails);assert.equal(item.deleted_at,undefined);assert.equal(item.quantity,1);assert.equal(item.barcode,barcode);assert.ok(codesOf(item).includes(code));
+ assert.equal(state.items.length,4);assert.deepEqual(state.movements.slice(0,before.movements.length),before.movements);
+ assert.deepEqual([state.movements.at(-1).type,state.movements.at(-1).item_id,state.movements.at(-1).before,state.movements.at(-1).after],['RETURNED_TO_WORKSHOP',h.nails,0,1]);
+ assert.equal(h.apiCalls.some(call=>call.path==='items/'+h.nails+'/restore'),false,'The return and automatic restoration must save together');
+ h.document.clickRendered('done');h.navigate('inventory');assert.ok(stockIds(h).includes(h.nails));h.navigate('materials');assert.ok(materialManagerIds(h).includes(h.nails));
 });
 
 test('Stock Out offers positive quantities and a scanned depleted item fails before the quantity step',async t=>{

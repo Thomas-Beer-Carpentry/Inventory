@@ -63,15 +63,16 @@ class Document {
  dispatch(name,event){for(const handler of this.handlers.get(name)||[])handler(event);}
  querySelector(selector){if(selector.startsWith('#'))return this.nodes.get(selector.slice(1))||null;return [...this.elements].find(element=>element.matches(selector))||null;}
  querySelectorAll(){return [];}
- click(action){const target={dataset:{action},closest(){return this;}};this.dispatch('click',{target});}
+ click(action,extra={}){const target={dataset:{action,...extra},closest(){return this;}};this.dispatch('click',{target});}
  input(id,value){const target=this.nodes.get(id);assert.ok(target,'The actual app must render '+id);target.value=String(value);this.dispatch('input',{target});}
  changeMaterial(id){const target=this.nodes.get('item-existing');assert.ok(target,'The actual app must render its saved-material dropdown');target.value=id;this.dispatch('change',{target});}
  changeCamera(id){const target=this.nodes.get('scan-camera');assert.ok(target,'The actual app must render its camera selector');target.value=id;this.dispatch('change',{target});}
 }
 
-async function app({preference=''}={}){
+async function app({preference='',deletedMaterial=false}={}){
  const document=new Document(),plans=[],scanners=[],writes=[],active=new Set(),apiCalls=[];
  const state={items:[{id:'nails-item',name:'Nails',barcode,barcode_aliases:[aliasBarcode],unit:'boxes',quantity:5},{id:'timber-item',name:'Timber',barcode:null,unit:'lengths',quantity:2}],jobs:[],movements:[],user:{name:'Eryk',configured:true}};
+ if(deletedMaterial)state.items[1].deleted_at='2026-10-08T08:00:00.000Z';
  const window={addEventListener(){}};
  const collaborators={
   document,window,console,crypto,URL,Intl,Date,
@@ -109,6 +110,60 @@ function enterMaterial(h,{name='Concrete',unit='bags',quantity=3,code=''}={}){
  h.document.input('item-name',name);h.document.input('item-unit',unit);
  h.document.input('item-qty',quantity);h.document.input('item-barcode',code);
 }
+
+for(const {title,code} of [{title:'an unknown brand barcode',code:'BRAND-NEW-00042'},{title:'another material’s saved alias',code:aliasBarcode}]){
+ test('Scanning '+title+' in Manage Material only fills its barcode field for explicit saving',async()=>{
+  const h=await app();h.document.click('materialmanage',{item:'timber-item'});
+  const manager=h.controller.currentDraft();assert.deepEqual([manager.kind,manager.itemId],['material','timber-item']);
+  await h.controller.startCamera();assert.equal(h.scanners.length,1);
+  await h.scanners[0].options.onCode(code);await flush();
+  assert.equal(h.controller.currentDraft(),manager);assert.deepEqual([manager.kind,manager.itemId],['material','timber-item']);
+  assert.equal(h.document.querySelector('#material-barcode').value,code);
+  assert.equal(h.document.querySelector('#item-existing'),null);assert.equal(h.document.querySelector('#move-qty'),null);
+  assert.equal(h.scanners[0].stops,1);assert.equal(h.active.size,0);
+  assert.deepEqual(h.apiCalls,['state'],'A manager scan must not save a barcode or create a stock transaction automatically');
+ });
+}
+
+test('Closing Manage Material during accepted-scan cleanup cannot write into the next Add Material form',async()=>{
+ const h=await app(),stop=deferred(),choices=deferred();h.document.click('materialmanage',{item:'timber-item'});
+ assert.deepEqual([h.controller.currentDraft().kind,h.controller.currentDraft().itemId],['material','timber-item']);
+ h.plan({stop,choices});await h.controller.startCamera();
+ const scan=h.scanners[0].options.onCode('LATE-BRAND-001');await flush();
+ h.controller.closeModal();h.document.click('newitem');enterMaterial(h,{quantity:12});
+ const modal=h.document.querySelector('#modal-root').innerHTML,draft=JSON.stringify(h.controller.currentDraft());
+ stop.resolve();choices.resolve({cameras:[{id:'late',label:'Late camera'}],selectedId:'late'});
+ await scan;await h.controller.stopCamera();await flush();
+ assert.equal(h.document.querySelector('#modal-root').innerHTML,modal);assert.equal(JSON.stringify(h.controller.currentDraft()),draft);
+ assert.equal(h.document.querySelector('#item-barcode').value,'');assert.equal(h.document.querySelector('#item-qty').value,'12');
+ assert.equal(h.document.querySelector('#material-barcode'),null);assert.equal(h.document.querySelector('#scan-camera'),null);
+ assert.equal(h.active.size,0);assert.deepEqual(h.apiCalls,['state']);
+});
+
+test('Opening material deletion while an accepted manager scan stops its camera preserves the deletion confirmation',async()=>{
+ const h=await app(),stop=deferred();h.document.click('materialmanage',{item:'timber-item'});h.plan({stop});
+ assert.deepEqual([h.controller.currentDraft().kind,h.controller.currentDraft().itemId],['material','timber-item']);
+ await h.controller.startCamera();const scan=h.scanners[0].options.onCode('LATE-BRAND-002');await flush();
+ h.document.click('deleteitem',{item:'timber-item'});
+ assert.deepEqual([h.controller.currentDraft().kind,h.controller.currentDraft().itemId],['materialremove','timber-item']);
+ const modal=h.document.querySelector('#modal-root').innerHTML,draft=JSON.stringify(h.controller.currentDraft());
+ stop.resolve();await scan;await h.controller.stopCamera();await flush();
+ assert.equal(h.document.querySelector('#modal-root').innerHTML,modal);assert.equal(JSON.stringify(h.controller.currentDraft()),draft);
+ assert.equal(h.document.querySelector('#material-barcode'),null);assert.equal(h.active.size,0);
+ assert.deepEqual(h.apiCalls,['state'],'Showing a deletion confirmation cannot save the scanned code or change stock');
+});
+
+test('A deleted material manager offers no scan field and refuses direct or stale camera startup',async()=>{
+ const h=await app({deletedMaterial:true});h.document.click('materialmanage',{item:'timber-item'});
+ assert.deepEqual([h.controller.currentDraft().kind,h.controller.currentDraft().itemId],['material','timber-item']);
+ const modal=h.document.querySelector('#modal-root').innerHTML,draft=JSON.stringify(h.controller.currentDraft());
+ assert.equal(h.document.querySelector('#material-barcode'),null);
+ await h.controller.startCamera('main',true);h.document.click('camera');
+ h.document.dispatch('change',{target:{id:'scan-camera',value:'late-camera'}});await flush();
+ assert.equal(h.scanners.length,0);assert.equal(h.active.size,0);assert.deepEqual(h.writes,[]);
+ assert.equal(h.document.querySelector('#modal-root').innerHTML,modal);assert.equal(JSON.stringify(h.controller.currentDraft()),draft);
+ assert.deepEqual(h.apiCalls,['state']);
+});
 
 test('A known barcode scan fills the same Add Material popup and retains its typed quantity before confirmation',async()=>{
  const h=await app(),original=h.controller.currentDraft();
